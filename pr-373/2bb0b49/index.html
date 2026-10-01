@@ -1,0 +1,16 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>#373 界面预览 · 2bb0b49</title>
+<style>:root{color-scheme:light dark;--bg:#f6f6f7;--fg:#1d1d1f;--muted:#6e6e73;--card:#fff;--line:#e5e5ea}
+@media (prefers-color-scheme:dark){:root{--bg:#111113;--fg:#f2f2f4;--muted:#9a9aa0;--card:#1c1c1f;--line:#2c2c30}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 16px 60px}h1{font-size:20px;margin:0 0 4px}.m{color:var(--muted);font-size:13px;margin:0 0 20px}
+video,img{display:block;width:100%;border-radius:10px;border:1px solid var(--line);background:var(--card)}figure{margin:0 0 28px}figcaption{color:var(--muted);font-size:13px;margin-top:8px}
+a{color:inherit}</style>
+<main><h1>#373 界面预览</h1><p class="m">commit 2bb0b49 · <a href="https://github.com/yetone/magpie/pull/373">回到 PR</a> · 网关页的「接入」区不再固定显示 magpie：它按公开地址（MAGPIE_PUBLIC_URL）和局域网共享状态显示不同的 API Key、说明文案，并把该 Key 用进各 API 的 Shell/curl/Python/Node 示例与复制按钮（后端在 /api/providers 的 gateway 里新增 lan/lanKey/open，url 改用 PublicURL()）。中文界面里的「API 密钥」「密钥」也改成了「API Key」「Key」。</p>
+<figure><video src="preview.mp4" controls autoplay muted playsinline poster="poster.png"></video><figcaption>红线是鼠标走过的轨迹，红色圆环是一次点击；底部文字是这一步在做什么。空格暂停，← → 逐段查看。</figcaption></figure>
+<figure><img src="01-gateway-connect.png" alt="网关页的「接入」区：API Key 一行与提示文案"><figcaption>网关页接入区的 Key 与示例 · 网关页的「接入」区：API Key 一行与提示文案</figcaption></figure>
+<figure><img src="02-gateway-curl-snippet.png" alt="curl 示例里的地址与 Key"><figcaption>网关页接入区的 Key 与示例 · curl 示例里的地址与 Key</figcaption></figure>
+<figure><img src="03-gateway-anthropic.png" alt="Anthropic 下的 Base URL、API Key 与示例"><figcaption>网关页接入区的 Key 与示例 · Anthropic 下的 Base URL、API Key 与示例</figcaption></figure>
+<figure><img src="04-settings-lan.png" alt="设置里的「局域网共享」一行"><figcaption>开启局域网共享后的接入区 · 设置里的「局域网共享」一行</figcaption></figure>
+<figure><img src="05-gateway-connect-shared.png" alt="开启共享后网关页的接入区"><figcaption>开启局域网共享后的接入区 · 开启共享后网关页的接入区</figcaption></figure>
+</main></html>

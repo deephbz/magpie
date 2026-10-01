@@ -1,0 +1,39 @@
+{
+  "summary": "路由页的请求列表新增「按请求 / 按会话」分组切换（选择写入 localStorage，刷新后保留），每条请求的元信息末尾以及每个会话标题末尾显示按有效价格估算的费用（未知显示 —、部分合计带 +），会话标题可点击折叠；保留的历史日请求也会带同样的估算。",
+  "scenes": [
+    {
+      "title": "路由请求列表的分组切换",
+      "shots": [
+        {
+          "file": "01-routing-by-request.png",
+          "caption": "路由页默认的「按请求」列表：分组切换按钮与每行末尾的费用估算",
+          "width": 2560
+        },
+        {
+          "file": "02-routing-by-session.png",
+          "caption": "点击「按会话」后的请求列表",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "保留日里的费用估算",
+      "shots": [
+        {
+          "file": "03-routing-day-costs.png",
+          "caption": "「今天」保留列表里的费用估算",
+          "width": 2560
+        }
+      ]
+    }
+  ],
+  "video": "preview.mp4",
+  "poster": "poster.png",
+  "errors": [],
+  "leak": false,
+  "skipped": null,
+  "mismatch": "",
+  "unseen": "沙盒里只有 DeepSeek 一个供应商，请求来自 curl、不带会话标识，也没有 Codex 的本地会话名称索引（session_index.jsonl），所以看不到会话标题本身：聊天名称与重命名、Codex 标题助手并入父会话、未提供会话标识的单独分组、折叠会话、会话合计的 + 部分估算。因此按「按会话」时列表仍按请求平铺。另外人民币货币下重新计价、缓存读写与拒绝重试的多档估算也无法在这里体现。",
+  "interactive": true,
+  "pages": 1
+}

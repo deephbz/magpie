@@ -1,0 +1,49 @@
+{
+  "summary": "网关页的「接入」区不再固定显示 magpie：它按公开地址（MAGPIE_PUBLIC_URL）和局域网共享状态显示不同的 API Key、说明文案，并把该 Key 用进各 API 的 Shell/curl/Python/Node 示例与复制按钮（后端在 /api/providers 的 gateway 里新增 lan/lanKey/open，url 改用 PublicURL()）。中文界面里的「API 密钥」「密钥」也改成了「API Key」「Key」。",
+  "scenes": [
+    {
+      "title": "网关页接入区的 Key 与示例",
+      "shots": [
+        {
+          "file": "01-gateway-connect.png",
+          "caption": "网关页的「接入」区：API Key 一行与提示文案",
+          "width": 2560
+        },
+        {
+          "file": "02-gateway-curl-snippet.png",
+          "caption": "curl 示例里的地址与 Key",
+          "width": 2560
+        },
+        {
+          "file": "03-gateway-anthropic.png",
+          "caption": "Anthropic 下的 Base URL、API Key 与示例",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "开启局域网共享后的接入区",
+      "shots": [
+        {
+          "file": "04-settings-lan.png",
+          "caption": "设置里的「局域网共享」一行",
+          "width": 2560
+        },
+        {
+          "file": "05-gateway-connect-shared.png",
+          "caption": "开启共享后网关页的接入区",
+          "width": 2560
+        }
+      ]
+    }
+  ],
+  "video": "preview.mp4",
+  "poster": "poster.png",
+  "errors": [],
+  "leak": false,
+  "skipped": null,
+  "mismatch": "描述说设置页也会显示公开地址（internal/gui/api.go 的 settingsState().Gateway 改用 PublicURL()），但 diff 完全没有改动 api.go；新增的 internal/gui/public_url_test.go 反而断言设置页返回的是 gateway.URL()（本机地址），所以设置页「关于 → 网关地址」仍显示本机回环地址。描述里说的 Agent 配置写入和 CLI 打印的地址不属于这些界面，本次也不会在这里看到。",
+  "unseen": "沙盒没有设置 MAGPIE_PUBLIC_URL，局域网共享也是关闭的，网关页只能出现「回环地址 · 仅本机可连接」这一分支（Key 仍是 magpie）；「共享网关 · 请使用局域网 Key」「已开放到网络 · 任何能连上的人填任意 Key 都能用」「未开启共享 · 其他机器无法连接」「共享缺少 Key」等分支需要公开地址、非回环监听地址或不同共享状态才会出现，本沙盒无法复现。写入 Agent 配置和 CLI 打印的地址同样不在界面内。",
+  "interactive": true,
+  "pages": 3
+}

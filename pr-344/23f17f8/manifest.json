@@ -1,0 +1,84 @@
+{
+  "summary": "网关页新增「网关密钥」管理块（仅在局域网共享开启时出现），可创建、重命名、启用/停用、复制、轮换和移除命名密钥，轮换/移除前有确认框；接入区的 Base URL 与密钥改成可选的下拉（地址分「本机/局域网」，密钥列出已启用的网关密钥）；用量概览新增按网关密钥分组，请求页新增密钥筛选并在行内显示密钥名；设置的「局域网」行去掉了旧的 API Key 显示与「换新 Key」按钮。",
+  "scenes": [
+    {
+      "title": "设置里的局域网共享",
+      "shots": [
+        {
+          "file": "01-settings-lan-off.png",
+          "caption": "设置 → 局域网区域，共享关闭时",
+          "width": 2560
+        },
+        {
+          "file": "02-settings-lan-on.png",
+          "caption": "切到「开启」后同一区域",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "网关密钥的创建与轮换确认",
+      "shots": [
+        {
+          "file": "03-gateway-keys-block.png",
+          "caption": "网关页的「网关密钥」区域",
+          "width": 2560
+        },
+        {
+          "file": "04-gateway-key-form.png",
+          "caption": "填好名称的新建表单",
+          "width": 2560
+        },
+        {
+          "file": "05-gateway-keys-created.png",
+          "caption": "创建后的网关密钥列表",
+          "width": 2560
+        },
+        {
+          "file": "06-gateway-key-rotate-ask.png",
+          "caption": "轮换确认对话框",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "接入区的地址与密钥选择",
+      "shots": [
+        {
+          "file": "07-connect-key-menu.png",
+          "caption": "展开的密钥选择菜单",
+          "width": 2560
+        },
+        {
+          "file": "08-connect-address-menu.png",
+          "caption": "展开的地址选择菜单",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "用量里的网关密钥位置",
+      "shots": [
+        {
+          "file": "09-usage-keys-place.png",
+          "caption": "用量 → 概览底部：模型分组之下、统计说明之上的位置",
+          "width": 2560
+        },
+        {
+          "file": "10-usage-requests-filters.png",
+          "caption": "请求页顶部的筛选行",
+          "width": 2560
+        }
+      ]
+    }
+  ],
+  "video": "preview.mp4",
+  "poster": "poster.png",
+  "errors": [],
+  "leak": false,
+  "skipped": null,
+  "mismatch": "",
+  "unseen": "用量概览的「网关密钥」分组、请求页的密钥筛选与行内密钥名、CSV 里的 caller_key_id/caller_key_name，都需要归属到网关密钥的调用记录；沙箱里的历史调用没有 callerKeyId，新建的密钥也还没有被调用，所以这些位置只能看到空位。命令行 magpie gateway-key list/add/rotate/remove、设置只读时默认密钥轮换/停用/移除的报错与提示、加密备份包含密钥库、迁移失败只记日志，都不在浏览器界面里，录屏无法展示。",
+  "interactive": true,
+  "pages": 3
+}

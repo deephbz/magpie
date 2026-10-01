@@ -1,0 +1,21 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>#344 界面预览 · 23f17f8</title>
+<style>:root{color-scheme:light dark;--bg:#f6f6f7;--fg:#1d1d1f;--muted:#6e6e73;--card:#fff;--line:#e5e5ea}
+@media (prefers-color-scheme:dark){:root{--bg:#111113;--fg:#f2f2f4;--muted:#9a9aa0;--card:#1c1c1f;--line:#2c2c30}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 16px 60px}h1{font-size:20px;margin:0 0 4px}.m{color:var(--muted);font-size:13px;margin:0 0 20px}
+video,img{display:block;width:100%;border-radius:10px;border:1px solid var(--line);background:var(--card)}figure{margin:0 0 28px}figcaption{color:var(--muted);font-size:13px;margin-top:8px}
+a{color:inherit}</style>
+<main><h1>#344 界面预览</h1><p class="m">commit 23f17f8 · <a href="https://github.com/yetone/magpie/pull/344">回到 PR</a> · 网关页新增「网关密钥」管理块（仅在局域网共享开启时出现），可创建、重命名、启用/停用、复制、轮换和移除命名密钥，轮换/移除前有确认框；接入区的 Base URL 与密钥改成可选的下拉（地址分「本机/局域网」，密钥列出已启用的网关密钥）；用量概览新增按网关密钥分组，请求页新增密钥筛选并在行内显示密钥名；设置的「局域网」行去掉了旧的 API Key 显示与「换新 Key」按钮。</p>
+<figure><video src="preview.mp4" controls autoplay muted playsinline poster="poster.png"></video><figcaption>红线是鼠标走过的轨迹，红色圆环是一次点击；底部文字是这一步在做什么。空格暂停，← → 逐段查看。</figcaption></figure>
+<figure><img src="01-settings-lan-off.png" alt="设置 → 局域网区域，共享关闭时"><figcaption>设置里的局域网共享 · 设置 → 局域网区域，共享关闭时</figcaption></figure>
+<figure><img src="02-settings-lan-on.png" alt="切到「开启」后同一区域"><figcaption>设置里的局域网共享 · 切到「开启」后同一区域</figcaption></figure>
+<figure><img src="03-gateway-keys-block.png" alt="网关页的「网关密钥」区域"><figcaption>网关密钥的创建与轮换确认 · 网关页的「网关密钥」区域</figcaption></figure>
+<figure><img src="04-gateway-key-form.png" alt="填好名称的新建表单"><figcaption>网关密钥的创建与轮换确认 · 填好名称的新建表单</figcaption></figure>
+<figure><img src="05-gateway-keys-created.png" alt="创建后的网关密钥列表"><figcaption>网关密钥的创建与轮换确认 · 创建后的网关密钥列表</figcaption></figure>
+<figure><img src="06-gateway-key-rotate-ask.png" alt="轮换确认对话框"><figcaption>网关密钥的创建与轮换确认 · 轮换确认对话框</figcaption></figure>
+<figure><img src="07-connect-key-menu.png" alt="展开的密钥选择菜单"><figcaption>接入区的地址与密钥选择 · 展开的密钥选择菜单</figcaption></figure>
+<figure><img src="08-connect-address-menu.png" alt="展开的地址选择菜单"><figcaption>接入区的地址与密钥选择 · 展开的地址选择菜单</figcaption></figure>
+<figure><img src="09-usage-keys-place.png" alt="用量 → 概览底部：模型分组之下、统计说明之上的位置"><figcaption>用量里的网关密钥位置 · 用量 → 概览底部：模型分组之下、统计说明之上的位置</figcaption></figure>
+<figure><img src="10-usage-requests-filters.png" alt="请求页顶部的筛选行"><figcaption>用量里的网关密钥位置 · 请求页顶部的筛选行</figcaption></figure>
+</main></html>

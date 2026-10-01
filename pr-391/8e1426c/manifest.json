@@ -1,0 +1,54 @@
+{
+  "summary": "这个 diff 给 magpie web 加了一套只在小屏／触屏（≤760px，或 pointer: coarse 且 ≤1024px）生效的响应式样式：顶栏导航自成一横行并可横向滚动、用量页筛选换行且搜索独占一行、图表日期标签按宽度隐藏、设置／供应商／路由组表单改为单列堆叠、模型选择器限制在视口内且触屏不自动聚焦，另外改了触摸惯性滚动的手势判定和窄屏下不再收缩顶栏。",
+  "scenes": [
+    {
+      "title": "用量页：图表日期与请求筛选",
+      "shots": [
+        {
+          "file": "01-usage-overview-desktop.png",
+          "caption": "1280×800 下的用量页概览：KPI、图表日期标签、Agent 与模型统计",
+          "width": 2560
+        },
+        {
+          "file": "02-usage-requests-desktop.png",
+          "caption": "切到「请求」后，列表上方的搜索框与筛选控件",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "路由页：路由组与分组编辑器",
+      "shots": [
+        {
+          "file": "03-routing-desktop.png",
+          "caption": "路由页：实时路由、最近的请求、账号统计与「路由组」区域",
+          "width": 2560
+        },
+        {
+          "file": "04-routing-group-editor.png",
+          "caption": "点「新建组」后打开的路由组编辑器",
+          "width": 2560
+        }
+      ]
+    },
+    {
+      "title": "设置页的偏好行",
+      "shots": [
+        {
+          "file": "05-settings-prefs-desktop.png",
+          "caption": "设置页顶部的偏好行：外观、语言、用量显示、货币",
+          "width": 2560
+        }
+      ]
+    }
+  ],
+  "video": "preview.mp4",
+  "poster": "poster.png",
+  "errors": [],
+  "leak": false,
+  "skipped": null,
+  "mismatch": "",
+  "unseen": "沙盒是在 1280×800 的桌面浏览器里、指针为精确指针，所以这套响应式规则完全不生效：顶栏导航的独立横行、安全区内边距、44px 触控目标、用量页筛选换行与搜索独占一行、请求／会话表的单列堆叠、图表日期标签的隐藏、设置行／供应商表单／路由组编辑器的单列布局、模型选择器的视口限制、触屏上打开选择器不自动聚焦，以及「触摸惯性滚动不被回拉」的行为，在本机都看不到；菜单栏面板页同样没有触屏。另外沙盒只配了 DeepSeek、没有订阅账号，所以涉及多供应商或额度窗口的分组卡片在窄屏下的样式也无数据可看。",
+  "interactive": true,
+  "pages": 3
+}
