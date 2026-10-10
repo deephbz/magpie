@@ -38,7 +38,8 @@ func TestCanFast(t *testing.T) {
 		want  bool
 	}{
 		{codex, "gpt-6.1-sol", true},
-		{claude, "claude-opus-5-5", false}, // Claude Code's own
+		{claude, "claude-opus-5-5", true}, // its Claude Code run in fast mode
+		{claude, "claude-sonnet-5", false},
 		{*oa, "gpt-6.1-sol", true},
 		{*oa, "o4-mini", true},
 		{*oa, "text-embedding-3", false},

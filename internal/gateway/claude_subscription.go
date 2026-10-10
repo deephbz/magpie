@@ -546,6 +546,11 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	if len(req.Format.schema()) > 0 {
 		args = append(args, "--json-schema", string(req.Format.schema()))
 	}
+	if claudeFast(req) {
+		// Claude Code's fast mode, the setting /fast turns on: it sends
+		// speed "fast" and the fast-mode beta itself
+		args = append(args, "--settings", `{"fastMode":true}`)
+	}
 	work, err := claudeWorkDir()
 	var sessions []string
 	switch {
@@ -920,7 +925,7 @@ func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *loos
 		}
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, req.WebSearch, req.Format.schema(), start)
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d\x00%t", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, req.WebSearch, req.Format.schema(), start, claudeFast(req))
 	hashMessages(h, msgs[:start], nil)
 	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), runs: heardRuns(msgs[start:], sealed)}
 	words := messageWords(msgs)
@@ -1597,7 +1602,7 @@ func (r *subscriptionRun) park() {
 func turnKey(owner string, req *Request, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, tools, req.WebSearch, req.Format.schema())
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s\x00%t", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, tools, req.WebSearch, req.Format.schema(), claudeFast(req))
 	hashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -1717,6 +1722,14 @@ func claudeCLIArgs(model, mcpConfig, effort string, web bool) []string {
 		args = append(args, "--effort", effort, "--thinking-display", "summarized")
 	}
 	return args
+}
+
+// claudeFast says the turn asks for Claude's fast mode (a member or pick
+// sent fast, or the client's own speed "fast") on a model that has it. A
+// run is started in it or not, so the turn keys hold it: a fast turn never
+// goes on in a run at the usual speed.
+func claudeFast(req *Request) bool {
+	return req.Fast && provider.ClaudeFast(req.Model)
 }
 
 // inClaudeDir is env for a Claude Code run on a saved account in use beside

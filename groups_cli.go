@@ -59,7 +59,8 @@ const groupUsage = `usage:
            (a rule can send to either). A model whose own id ends so (a :free, :7b or :0) stays as it is
            provider/model[:effort]:fast sends the member in its vendor's fast mode: priority processing on a
            ChatGPT account (Codex's Fast) or an OpenAI key, Cursor's -fast model, Claude's fast mode on an
-           Anthropic key for Opus 4.8 and 5; a model without one is refused (codex/gpt-6.1-sol:high:fast)
+           Anthropic key or a Claude subscription for Opus 4.8, 5 and 5.5 (a subscription's is billed as extra
+           usage); a model without one is refused (codex/gpt-6.1-sol:high:fast)
            a pattern puts in every model it matches, as magpie models lists them now and later: a glob, where
            * is any run of characters, / too, over the provider/model id in any case (openrouter/*:free,
            *-free, opencode-zen/*), or re:<regexp> matching the whole id (re:openrouter/.*:(free|beta)).

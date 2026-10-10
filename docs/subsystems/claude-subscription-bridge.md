@@ -204,10 +204,30 @@ claude-hud shows. One that signs in to magpie with magpie's key
 headers only for a claude.ai subscriber. A reply another provider answered
 carries none.
 
+## Fast mode
+
+A turn asks for Claude's fast mode when a routing group's member is sent
+fast, the agent's pick is sent fast (`FastPicks`), or the client says
+`speed: "fast"` itself. `provider.CanFast` allows it on a Claude
+subscription for the Opus models with fast mode (`provider.ClaudeFast`).
+The bridge can't add `speed` to a request: Claude Code builds the request.
+So the run is started in Claude Code's own fast mode, the setting `/fast`
+turns on (`startRun`: `--settings {"fastMode":true}`). Claude Code
+then sends `speed: "fast"` and the `fast-mode-2026-02-01` beta.
+
+A run is fast or not for its whole life, so `turnKey` and `looseTurn`
+hold `claudeFast(req)`. A fast turn never goes on in a run started at the
+usual speed, nor the other way; it starts a new run.
+
+Anthropic bills a subscription's fast mode as extra usage. With extra usage
+off, Claude Code turns fast mode off for the turn and it runs at the usual
+speed (its `result` says `fast_mode_disabled_reason:
+"extra_usage_disabled"`). The bridge doesn't report this.
+
 ## Verification
 
 ```sh
-go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy' -count=1
+go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeSubscriptionFastRun|ClaudeTurnKeyHoldsFast' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each

@@ -3,9 +3,9 @@ package provider
 // A group's member may be sent in its vendor's fast mode (Discord: "gpt-6.1
 // sol · high · fast"): OpenAI's priority processing (service_tier
 // "priority", Codex's Fast) on a ChatGPT account or an OpenAI key, Cursor's
-// -fast model, Claude's fast mode (speed "fast") on an Anthropic key for
-// the Opus models that have it. A member whose model has none is sent as
-// it is.
+// -fast model, Claude's fast mode (speed "fast") on an Anthropic key or a
+// Claude subscription for the Opus models that have it. A member whose
+// model has none is sent as it is.
 //
 // Group.Fast lists those members as Members spells them, kept apart from
 // the member's id so that a version before it, which reads no "fast",
@@ -48,9 +48,10 @@ func (g Group) IsFast(id string) bool {
 // CanFast reports whether model, as p serves it, has a fast mode magpie
 // can ask for: a ChatGPT account's GPT models (Codex's Fast), Cursor's
 // models with a -fast one, an OpenAI key's GPT and o-series models on its
-// Responses API (priority processing), and an Anthropic key's Opus models with fast mode.
-// A Claude subscription runs Claude Code itself, and a relay or a cloud
-// (Bedrock, Vertex) may refuse the field, so neither is.
+// Responses API (priority processing), and the Opus models with fast mode
+// on an Anthropic key or a Claude subscription (its Claude Code run is
+// started in fast mode, startRun). A relay or a cloud (Bedrock,
+// Vertex) may refuse the field, so neither is.
 func CanFast(p Provider, model string) bool {
 	if p.IsPlugin() {
 		// Cursor's plugin runs a model as its fast variant when the chat
@@ -75,6 +76,8 @@ func CanFast(p Provider, model string) bool {
 		switch p.Account.Agent {
 		case "codex":
 			return strings.HasPrefix(model, "gpt-")
+		case "claude":
+			return ClaudeFast(model)
 		case "cursor":
 			if strings.HasSuffix(model, "-fast") {
 				return false
@@ -137,7 +140,7 @@ func cleanFast(entries []Entry, g *Group) error {
 			return fmt.Errorf("%s is a group: its models are sent as it says, so it takes no :%s", model, FastWord)
 		}
 		if p, m, ok := resolveIn(entries, model); ok && !CanFast(p, m) {
-			return fmt.Errorf("%s has no fast mode magpie can ask for (ChatGPT and OpenAI GPT models, Cursor's with a fast one, and Claude Opus 4.8 and 5 on an Anthropic key have)", model)
+			return fmt.Errorf("%s has no fast mode magpie can ask for (ChatGPT and OpenAI GPT models, Cursor's with a fast one, and Claude Opus 4.8, 5 and 5.5 on an Anthropic key or a Claude subscription have)", model)
 		}
 		out = append(out, f)
 	}
