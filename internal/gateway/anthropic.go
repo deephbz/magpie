@@ -69,10 +69,35 @@ func (b aBlock) MarshalJSON() ([]byte, error) {
 // ephemeral marks a prompt-cache breakpoint.
 var ephemeral = map[string]string{"type": "ephemeral"}
 
+// systemCache is where a system prompt's marked blocks end in the text
+// stringOrText makes of it, with each mark's TTL.
+func systemCache(raw json.RawMessage) []CacheMark {
+	var blocks []json.RawMessage
+	if decodeJSON(raw, &blocks) != nil {
+		return nil
+	}
+	var marks []CacheMark
+	for i, b := range blocks {
+		var block struct {
+			CacheControl map[string]string `json:"cache_control"`
+		}
+		if decodeJSON(b, &block) != nil {
+			continue
+		}
+		if ttl := cacheTTL(block.CacheControl); ttl != "" {
+			upTo, _ := json.Marshal(blocks[:i+1])
+			marks = append(marks, CacheMark{End: len(stringOrText(upTo)), TTL: ttl})
+		}
+	}
+	return marks
+}
+
 type aRequest struct {
-	Model    string          `json:"model"`
-	System   json.RawMessage `json:"system,omitempty"`
-	Messages []struct {
+	Model string `json:"model"`
+	// automatic caching: the request's last block is marked for the cache
+	CacheControl map[string]string `json:"cache_control,omitempty"`
+	System       json.RawMessage   `json:"system,omitempty"`
+	Messages     []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
@@ -115,6 +140,7 @@ func parseAnthropic(body []byte) (*Request, error) {
 	}
 	r := &Request{Model: a.Model, System: stringOrText(a.System), MaxTokens: a.MaxTokens,
 		Temp: a.Temperature, TopP: a.TopP, Stop: a.StopSequences, Stream: a.Stream, Fast: a.Speed == "fast"}
+	r.SystemCache, r.CacheTail = systemCache(a.System), cacheTTL(a.CacheControl)
 	r.Safeguards = a.Safeguards
 	if string(r.Safeguards) == "null" {
 		r.Safeguards = nil
@@ -139,6 +165,7 @@ func parseAnthropic(body []byte) (*Request, error) {
 			}
 			var raws []json.RawMessage // each block as the client sent it
 			for i, b := range blocks {
+				before := len(msg.Parts)
 				switch b.Type {
 				case "text":
 					msg.Parts = append(msg.Parts, Part{Kind: Text, Text: b.Text})
@@ -163,6 +190,9 @@ func parseAnthropic(body []byte) (*Request, error) {
 					if i < len(raws) {
 						msg.Parts = append(msg.Parts, Part{Kind: Thinking, Sealed: raws[i], SealedBy: sealAnthropic})
 					}
+				}
+				if len(msg.Parts) > before {
+					msg.Parts[len(msg.Parts)-1].Cache = cacheTTL(b.CacheControl)
 				}
 			}
 		}

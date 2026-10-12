@@ -64,6 +64,10 @@ type Part struct {
 
 	// web_search: Text is the query
 	Hits []Hit
+
+	// Cache is the client's prompt-cache mark on the block (Anthropic's
+	// cache_control), by its TTL: "5m" or "1h", "" for none
+	Cache string
 }
 
 // The APIs a Part's Sealed reasoning is in.
@@ -225,6 +229,32 @@ type Request struct {
 	// arguments reach the client with their zero fractions dropped
 	// (grok_integral.go).
 	Grok bool
+	// SystemCache are the client's prompt-cache marks in its system
+	// prompt: where in System each marked block ends, with the mark's TTL.
+	// CacheTail is the TTL of the mark it asked for on the whole request
+	// (Anthropic's automatic caching: the request's last block is marked).
+	// Part.Cache has the marks on its messages.
+	SystemCache []CacheMark
+	CacheTail   string
+}
+
+// CacheMark is a client's prompt-cache mark in its system prompt: the
+// prompt is cached up to End, a byte offset in Request.System, for TTL.
+type CacheMark struct {
+	End int
+	TTL string
+}
+
+// cacheTTL is the TTL an Anthropic cache_control names: "5m" or "1h".
+// A mark that names none is "", as is no mark: it is Anthropic's 5-minute
+// default, which a client sends without choosing it (Claude Code on an API
+// key, Pi's default), and is the gateway's to place, as Claude Code's
+// subscription caches for an hour (clientCaches).
+func cacheTTL(cc map[string]string) string {
+	if cc["type"] != "ephemeral" || cc["ttl"] != "5m" && cc["ttl"] != "1h" {
+		return ""
+	}
+	return cc["ttl"]
 }
 
 // nsTool is a tool as a Responses client knows it: by its namespace and its

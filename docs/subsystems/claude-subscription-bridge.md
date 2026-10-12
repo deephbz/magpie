@@ -67,6 +67,34 @@ A turn that goes on in the run that had the last one is told only the
 messages since (`renderClaudeTurn`), and Anthropic reads the rest from the
 cache.
 
+## Client-placed cache marks
+
+A client that names a TTL (`5m` or `1h`) on its own `cache_control` marks
+(a Pi extension can) places the marks itself (`claude_cache.go`). Marks
+that name no TTL leave the run as before: honoring them would turn Claude
+Code's 1h marks into 5m ones.
+
+- The run starts with `DISABLE_PROMPT_CACHING=1`, so all four of
+  Anthropic's marks are the client's.
+- The system prompt's marks end blocks of their own in the run's first
+  message (`instructionMarks`). A shared global part is then one block
+  that runs for other projects repeat.
+- The mark on the request's end is a request-level `cache_control` in
+  `CLAUDE_CODE_EXTRA_BODY` (`setExtraBody`). It moves with the
+  conversation, and each request can change its TTL. It is never longer
+  than an earlier mark (`floor`): Anthropic refuses 1h after 5m.
+- The history's chunk mark takes the room that is left.
+
+A request that goes on from where a run answered an earlier request, while
+the run went on since (a client's compaction fork), starts from that run's
+session (`fork`, `claude_fork.go`): `--resume --fork-session
+--resume-session-at`. Claude Code joins a new user message to the one
+before it, so after a text turn the fork starts before that turn and is
+told it again, then the request's additions. After tool results it starts
+at them. `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off` keeps Claude Code's token
+countdown out of the session, where it would split the run's prefix from
+the fork's.
+
 ## Runtime path for a new turn
 
 `serveClaudeSubscription`'s `start` tries, in order:
@@ -293,7 +321,7 @@ carries none.
 
 ```sh
 go test -tags nogui ./internal/claudecode/ -count=1
-go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle' -count=1
+go test -tags nogui ./internal/gateway/ -run 'ClaudeSubscriptionRunsTheDownloaded|ClaudeSubscriptionWithoutClaudeCode|ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns|ClaudeHistoryCachedAcrossNewRuns|ClaudeClientCache|ClaudeForkStartsFromTheRunsSession|ClaudeUnloadableSession|ClaudeEndedRunSaysWhy|ClaudeIdle' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each

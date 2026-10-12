@@ -45,6 +45,14 @@ func newReplyHarness(t *testing.T, reply string) *resumeHarness {
 // $file its file, $log its log).
 func newScriptHarness(t *testing.T, reply, start string) *resumeHarness {
 	t.Helper()
+	return newTurnHarness(t, reply, start, "")
+}
+
+// newTurnHarness is newScriptHarness whose Claude Code also runs turn,
+// shell lines of its own, where Claude Code says its reply's message:
+// before the reply's stream ends.
+func newTurnHarness(t *testing.T, reply, start, turn string) *resumeHarness {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for Claude Code")
 	}
@@ -77,6 +85,7 @@ while read -r line; do
   case $line in *'"type":"control_request"'*)
     # acknowledged as Claude Code does: initialize, a settings change
     id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+    echo "control $line" >> $log
     echo '{"type":"control_response","response":{"subtype":"success","request_id":"'$id'"}}'
     continue ;;
   esac
@@ -84,6 +93,7 @@ while read -r line; do
   if [ -n "$file" ]; then echo "$line" >> "$file"; fi
   echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":1}}}}'
   echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + strconv.Quote(reply) + `}}}'
+` + turn + `
   echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}'
   echo '{"type":"stream_event","event":{"type":"message_stop"}}'
   echo '{"type":"result","subtype":"success","is_error":false,"result":""}'

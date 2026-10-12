@@ -196,6 +196,21 @@ type subscriptionRun struct {
 	// --effort) or was told since (setEffort); "" is Claude Code's own
 	effort string
 
+	// clientCache says its client places the prompt-cache marks
+	// (clientCaches): floor is the shortest TTL of those kept in its
+	// conversation, "" for none, and tail the TTL its Claude Code now
+	// marks each request's end for (setSafeguards), "" for none
+	clientCache bool
+	floor       string
+	tail        string
+
+	// points are where it answered the client's requests, each by the
+	// request's conversation (turnKey) and its reply's first message in
+	// the session; answering is the request it answers now, until that
+	// message (fork)
+	points    []runPoint
+	answering string
+
 	// loginVersion is the credential the run's account had when it
 	// started (provider.ClaudeLoginVersion), which a refusal it reports is
 	// kept for
@@ -622,6 +637,9 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	}
 	if from != nil {
 		args = append(args, "--resume", from.session)
+		if from.forkAt != "" {
+			args = append(args, "--fork-session", "--resume-session-at", from.forkAt)
+		}
 	} else if hasReply(req.Messages) {
 		// no run had the conversation: this one is told it whole, in one
 		// message, its earlier turns marked as such (renderClaudePrompt)
@@ -641,6 +659,12 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	env := netproxy.EnvWith(claudeProxy(ctx), cleanClaudeEnv(os.Environ()))
 	if len(req.Safeguards) > 0 {
 		env = append(env, "ANTHROPIC_BETAS="+req.SafeguardBeta)
+	}
+	client := req.clientCaches()
+	if client {
+		// Anthropic takes four marks, of which Claude Code's own caching
+		// takes three: off, all four are the client's (clientCaches)
+		env = append(env, "DISABLE_PROMPT_CACHING=1")
 	}
 	cmd.Env = binary.env(binary.asRoot(env), configDir)
 	stdin, err := cmd.StdinPipe()
@@ -666,6 +690,12 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	cmd.Stdout, cmd.Stderr = stdoutW, stderrW
 
 	run := &subscriptionRun{bridge: b, token: token, model: model, cmd: cmd, tmp: tmp, schema: len(req.Format.schema()) > 0, pending: map[string]chan mcpToolResult{}, stdin: stdin, owner: owner, effort: req.Effort, sessions: sessions}
+	run.clientCache, run.answering = client, turnKey(owner, req, req.Messages)
+	if client && from != nil {
+		run.floor = from.floor
+	} else if client {
+		run.floor = cacheFloor(req)
+	}
 	run.safeguardBeta = req.SafeguardBeta
 	if user, _ := ownerAccount(owner); user != "" {
 		run.loginVersion = provider.ClaudeLoginVersion(user)
@@ -698,7 +728,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		run.readOutput(stdout)
 	}()
 
-	if len(req.Safeguards) > 0 || from != nil {
+	if len(req.Safeguards) > 0 || from != nil || client {
 		// Initialize the SDK before applying settings. Send the potentially
 		// large context over stdin rather than an environment entry. A
 		// Claude Code resumed from a saved session answers it only once
@@ -717,12 +747,15 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	var prompt []map[string]any
 	if from != nil {
 		// the session is the run's now: its file goes when the run does,
-		// unless the run is shelved in turn
+		// unless the run is shelved in turn. A fork's is still the run's
+		// it was forked from: its own comes on its init message.
 		from.taken()
-		run.mu.Lock()
-		run.sessionID = from.session
-		run.mu.Unlock()
-		prompt = renderClaudeTurn(req.Messages[len(req.Messages)-len(from.since):], req.Tools)
+		if from.forkAt == "" {
+			run.mu.Lock()
+			run.sessionID = from.session
+			run.mu.Unlock()
+		}
+		prompt = append(renderClaudeTurn(from.again, req.Tools), renderClaudeTurn(from.since, req.Tools)...)
 	} else if prompt, err = renderClaudePrompt(req); err != nil {
 		run.abort()
 		return nil, nil, err
@@ -738,31 +771,51 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 // safeguardBody passes only the safety field through EXTRA_BODY: overriding the
 // CLI's own betas there would remove headers its genuine request needs.
 func safeguardBody(raw json.RawMessage) string {
+	return extraBody(raw, "")
+}
+
+// extraBody is safeguardBody with the cache mark on the request's end
+// (setSafeguards), "" for none.
+func extraBody(raw json.RawMessage, tail string) string {
 	body := map[string]any{}
 	if len(raw) > 0 {
 		body["safeguards"] = raw
+	}
+	if tail != "" {
+		body["cache_control"] = map[string]string{"type": "ephemeral", "ttl": tail}
 	}
 	b, _ := json.Marshal(body)
 	return string(b)
 }
 
-// setSafeguards updates the caller's context, not the VPS's permission state.
+// setSafeguards updates the caller's context, not the VPS's permission state,
+// and, for a client that places the cache marks, the mark on each request's
+// end: Anthropic's automatic caching marks the request's last block, which
+// moves with the conversation, where a mark in a message stays in it for
+// every request after. Its TTL is the client's on this request, as its user
+// picked it, but never longer than a mark before it: Anthropic
+// refuses a 1h mark after a 5m one.
 // A CLI unable to acknowledge the update is discarded by the caller; its old
 // context must never be used for another turn. The client's approval still
 // decides whether the tool runs, including a server verdict that is unavailable.
 func (r *subscriptionRun) setSafeguards(req *Request) error {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if bytes.Equal(r.safeguards, req.Safeguards) && (len(req.Safeguards) == 0 || r.safeguardBeta == req.SafeguardBeta) {
+	tail := ""
+	if r.clientCache {
+		tail = shorterTTL(cacheTail(req), r.floor)
+	}
+	if bytes.Equal(r.safeguards, req.Safeguards) && (len(req.Safeguards) == 0 || r.safeguardBeta == req.SafeguardBeta) && tail == r.tail {
 		return nil
 	}
 	if len(req.Safeguards) > 0 && r.safeguardBeta != req.SafeguardBeta {
 		return errors.New("safety beta changed; restart Claude Code")
 	}
 	err := r.cliControl(map[string]any{"subtype": "apply_flag_settings", "settings": map[string]any{
-		"env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": safeguardBody(req.Safeguards)}}})
+		"env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": extraBody(req.Safeguards, tail)}}})
 	if err == nil {
 		r.safeguards = bytes.Clone(req.Safeguards)
+		r.tail = tail
 	}
 	return err
 }
@@ -877,6 +930,7 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	ch := make(chan Event, 64)
 	run.segment = ch
 	run.turnUUID, run.backKey = turn, key
+	run.answering = turnKey(owner, req, req.Messages)
 	run.mu.Unlock()
 	run.timer.Reset(30 * time.Minute)
 	// a turn the router picked another effort for (#502) goes on in the
@@ -974,7 +1028,7 @@ func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *loos
 		}
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema(), start)
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d\x00%t", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema(), start, req.clientCaches())
 	hashMessages(h, msgs[:start], nil)
 	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), runs: heardRuns(msgs[start:], sealed)}
 	words := messageWords(msgs)
@@ -1278,6 +1332,13 @@ type savedSession struct {
 	at       time.Time       // since when it waits
 	timer    *time.Timer
 	since    []Message // the turn's messages, once unshelved
+	floor    string    // the run's floor (clientCache)
+	// forkAt is the message of the session a fork starts from (fork),
+	// whose session is still its run's: "" for a session of its own.
+	// again is the turn the run was told there, which the fork is told
+	// again, as it was, ahead of since and in blocks of their own.
+	forkAt string
+	again  []Message
 
 	mu   sync.Mutex
 	gone bool // taken by a run, or discarded
@@ -1288,13 +1349,13 @@ type savedSession struct {
 // go, leaves it.
 func (b *subscriptionBridge) shelve(run *subscriptionRun) {
 	run.mu.Lock()
-	sid, sessions, rewound, tools := run.sessionID, run.sessions, run.rewound, maps.Clone(run.tools)
+	sid, sessions, rewound, tools, floor := run.sessionID, run.sessions, run.rewound, maps.Clone(run.tools), run.floor
 	run.mu.Unlock()
 	if sid == "" || len(sessions) == 0 || rewound || run.idleKey == "" {
 		return
 	}
 	key := run.idleKey
-	s := &savedSession{session: sid, sessions: sessions, owner: run.owner, conv: run.convKey, key: key, loose: run.loose, tools: tools, at: run.idleAt}
+	s := &savedSession{session: sid, sessions: sessions, owner: run.owner, conv: run.convKey, key: key, loose: run.loose, tools: tools, at: run.idleAt, floor: floor}
 	if old := b.shelf[key]; old != nil {
 		go old.discard()
 	}
@@ -1688,7 +1749,7 @@ func (r *subscriptionRun) park() {
 func turnKey(owner string, req *Request, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema())
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s\x00%t", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema(), req.clientCaches())
 	hashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -1848,7 +1909,11 @@ func cleanClaudeEnv(env []string) []string {
 	// memory one conversation's caller wrote there would be in the system
 	// prompt of all the account's others, and a change to it would undo
 	// the cache from there on
-	return append(out, "ENABLE_CLAUDEAI_MCP_SERVERS=0", "DISABLE_AUTO_COMPACT=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+	// no token countdown: it tells the model Claude Code's own budget, not
+	// the client's, after each turn it is told, so a session resumed or
+	// forked at a turn (fork) is told what follows after that block where
+	// the run's request ended with the turn, its cache entry past it
+	return append(out, "ENABLE_CLAUDEAI_MCP_SERVERS=0", "DISABLE_AUTO_COMPACT=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off",
 		// an hour's cache, as Claude Code writes it on a subscription within
 		// its limits, always: the mark on the caller's instructions
 		// (renderClaudePrompt) is an hour's, which may not follow a 5m one
@@ -2044,7 +2109,9 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			IsError bool   `json:"is_error"`
 			// Claude Code's session, on its init message
 			SessionID string `json:"session_id"`
-			Result    string `json:"result"`
+			// the message's id in the session
+			UUID   string `json:"uuid"`
+			Result string `json:"result"`
 			// the answer fitting the schema, with --json-schema, and what
 			// went wrong in a turn that ended without one
 			StructuredOutput json.RawMessage `json:"structured_output"`
@@ -2179,6 +2246,9 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			return
 		}
 		if envelope.Type == "assistant" {
+			if whole.Model != "<synthetic>" {
+				r.replied(envelope.UUID)
+			}
 			// a failure says how it failed here, before its result
 			if envelope.RequestID != "" {
 				reqID = envelope.RequestID
@@ -2410,9 +2480,24 @@ func (u cliUsage) gateway() Usage {
 func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	var blocks []map[string]any
 	var text strings.Builder
+	client := req.clientCaches()
+	var marks []CacheMark
 	if req.System != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:") {
 		text.WriteString("<external_system_instructions>\n")
-		text.WriteString(withoutBillingHeader(req.System))
+		system := withoutBillingHeader(req.System)
+		at := 0
+		if client {
+			// the client's marks end blocks of their own, which every
+			// run told these instructions repeats (clientCaches)
+			marks = instructionMarks(req, len(req.System)-len(system))
+			for _, m := range marks {
+				text.WriteString(system[at:m.End])
+				blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": cacheMark(m.TTL)})
+				text.Reset()
+				at = m.End
+			}
+		}
+		text.WriteString(system[at:])
 		switch {
 		case req.ToolChoice == "required":
 			text.WriteString("\nYou must call at least one available tool before answering.")
@@ -2427,8 +2512,10 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		// instructions) found nothing cached past Claude Code's own prompt.
 		// The mark's TTL is the one Claude Code uses (claudeCacheTTL, pinned
 		// in cleanClaudeEnv): Anthropic refuses a 1h mark after a 5m one.
-		blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": cacheMark1h()})
-		text.Reset()
+		if !client {
+			blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": cacheMark("1h")})
+			text.Reset()
+		}
 	}
 	instructions := len(blocks) - 1
 	chunk := -1
@@ -2468,11 +2555,24 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	// the same conversation, as after a change of tools or a turn that
 	// missed its run, reads the history this one wrote, found within
 	// Anthropic's 20-block lookback, instead of writing all of it again.
-	if chunk >= 0 {
+	// A client that places the marks keeps its own, and the history's
+	// goes in the room they and the request's end's leave, for no longer
+	// than they are kept.
+	room := cacheMarksMost - len(marks)
+	if cacheTail(req) != "" {
+		room--
+	}
+	switch {
+	case chunk < 0:
+	case !client:
 		if instructions >= 0 {
 			delete(blocks[instructions], "cache_control")
 		}
-		blocks[chunk]["cache_control"] = cacheMark1h()
+		blocks[chunk]["cache_control"] = cacheMark("1h")
+	case room > 0 && len(marks) > 0:
+		blocks[chunk]["cache_control"] = cacheMark(marks[len(marks)-1].TTL)
+	case room > 0:
+		blocks[chunk]["cache_control"] = cacheMark("1h")
 	}
 	return closeBlocks(blocks, &text), nil
 }
@@ -2482,13 +2582,6 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 // conversation, so their text is the same; 20 blocks back from a run's
 // mark reach a mark 320 messages earlier.
 const historyChunk = 16
-
-// cacheMark1h is the prompt-cache mark on what magpie gives a run: an
-// hour's, as Claude Code's own (claudeCacheTTL, pinned in cleanClaudeEnv),
-// since Anthropic refuses a 1h mark after a 5m one.
-func cacheMark1h() map[string]string {
-	return map[string]string{"type": "ephemeral", "ttl": "1h"}
-}
 
 // historyOpen and historyClose wrap the turns a run started anew is told
 // were answered already, before the turn it is to answer (renderClaudePrompt).
@@ -3295,6 +3388,11 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 		}
 		// a run let go past idleMost left its session for this turn
 		from := s.subscription.unshelve(req, owner)
+		if from == nil {
+			// a run answered the conversation as it stood before this
+			// request's last messages, and has gone on since
+			from = s.subscription.fork(req, owner)
+		}
 		s.subscription.retire(owner, req.Messages)
 		if req.Effort == "" && autoModeClassifier(req) {
 			// Claude Code's auto mode classifier asks a verdict of a few
@@ -3426,6 +3524,9 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	if run != nil {
 		if name == "Claude Code" {
 			err = run.setSafeguards(req)
+			run.mu.Lock()
+			run.answering = turnKey(owner, req, req.Messages)
+			run.mu.Unlock()
 		}
 		// the tools are the run's before its agent is handed them: from
 		// then on it may answer, finish the turn and be shelved, or be
