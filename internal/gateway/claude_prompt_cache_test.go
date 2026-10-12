@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -63,5 +65,67 @@ func TestClaudeInstructionsWithoutBillingHeader(t *testing.T) {
 	}
 	if got := withoutBillingHeader("Rules mention x-anthropic-billing-header: here"); got != "Rules mention x-anthropic-billing-header: here" {
 		t.Fatalf("a mention later on: %q", got)
+	}
+}
+
+// A run started anew for a conversation with history marks the history's
+// last whole chunk, not the instructions, and a later run told more of the
+// same conversation repeats every block up to that mark: Anthropic finds
+// what the first wrote 20 blocks back from the second's mark. Before, the
+// history went in one block with the turn to answer, and each run started
+// anew wrote all of it again (a change of tools, a turn that missed its run).
+func TestClaudeHistoryCachedAcrossNewRuns(t *testing.T) {
+	conversation := func(replies int) *Request {
+		req := &Request{System: "rules", Tools: []Tool{{Name: "read"}}}
+		for i := 0; i < replies; i++ {
+			req.Messages = append(req.Messages,
+				Message{Role: "user", Parts: []Part{{Kind: Text, Text: fmt.Sprintf("question %d", i)}}},
+				Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: fmt.Sprintf("answer %d", i)}, {Kind: ToolCall, ID: fmt.Sprintf("c%d", i), Name: "read", Args: json.RawMessage(`{"path":"a"}`)}}},
+				Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: fmt.Sprintf("c%d", i), Text: "contents"}}},
+				Message{Role: "assistant", Parts: []Part{{Kind: Text, Text: fmt.Sprintf("done %d", i)}}})
+		}
+		req.Messages = append(req.Messages, Message{Role: "user", Parts: []Part{{Kind: Text, Text: "the turn to answer"}}})
+		return req
+	}
+	marked := func(blocks []map[string]any) []int {
+		var at []int
+		for i, b := range blocks {
+			if cc, ok := b["cache_control"].(map[string]string); ok {
+				if cc["ttl"] != "1h" {
+					t.Fatalf("block %d marked %v", i, cc)
+				}
+				at = append(at, i)
+			}
+		}
+		return at
+	}
+	earlier, err := renderClaudePrompt(conversation(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := renderClaudePrompt(conversation(25))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := marked(earlier), marked(later)
+	if len(first) != 1 || len(second) != 1 || first[0] == 0 || second[0] <= first[0] {
+		t.Fatalf("marks: earlier %v, later %v", first, second)
+	}
+	if second[0]-first[0] > 20 {
+		t.Fatalf("the earlier mark is %d blocks back, past Anthropic's lookback", second[0]-first[0])
+	}
+	for i := 0; i <= first[0]; i++ {
+		a, b := earlier[i]["text"], later[i]["text"]
+		if a != b {
+			t.Fatalf("block %d differs:\n%q\n%q", i, a, b)
+		}
+	}
+	if strings.Contains(earlier[first[0]]["text"].(string), "the turn to answer") {
+		t.Fatalf("the marked block holds the turn to answer")
+	}
+	// a conversation with less than a chunk of history keeps the mark on the instructions
+	short, _ := renderClaudePrompt(conversation(1))
+	if at := marked(short); len(at) != 1 || at[0] != 0 {
+		t.Fatalf("short conversation marks %v", at)
 	}
 }

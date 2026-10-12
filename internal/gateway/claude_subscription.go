@@ -2427,9 +2427,11 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		// instructions) found nothing cached past Claude Code's own prompt.
 		// The mark's TTL is the one Claude Code uses (claudeCacheTTL, pinned
 		// in cleanClaudeEnv): Anthropic refuses a 1h mark after a 5m one.
-		blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": map[string]string{"type": "ephemeral", "ttl": "1h"}})
+		blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": cacheMark1h()})
 		text.Reset()
 	}
+	instructions := len(blocks) - 1
+	chunk := -1
 	offered := offeredTools(req.Tools)
 	// A conversation with replies in it is told in two parts: the turns
 	// already answered, and the one to answer now (from the user message
@@ -2451,11 +2453,41 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		text.WriteString(label + ": ")
 		blocks = renderParts(blocks, &text, m.Parts, offered)
 		text.WriteString("\n\n")
+		if i+1 <= split && (i+1)%historyChunk == 0 {
+			blocks = append(blocks, map[string]any{"type": "text", "text": text.String()})
+			text.Reset()
+			chunk = len(blocks) - 1
+		}
 	}
 	if split > 0 {
 		text.WriteString("</current_turn>")
 	}
+	// The one mark a run's first message may have (Claude Code keeps three
+	// of Anthropic's four) moves from the instructions to the history's
+	// last whole chunk, which holds them too: a later run started anew for
+	// the same conversation, as after a change of tools or a turn that
+	// missed its run, reads the history this one wrote, found within
+	// Anthropic's 20-block lookback, instead of writing all of it again.
+	if chunk >= 0 {
+		if instructions >= 0 {
+			delete(blocks[instructions], "cache_control")
+		}
+		blocks[chunk]["cache_control"] = cacheMark1h()
+	}
 	return closeBlocks(blocks, &text), nil
+}
+
+// historyChunk is how many messages of the history renderClaudePrompt puts
+// in a block. Blocks end at the same messages in every run told the same
+// conversation, so their text is the same; 20 blocks back from a run's
+// mark reach a mark 320 messages earlier.
+const historyChunk = 16
+
+// cacheMark1h is the prompt-cache mark on what magpie gives a run: an
+// hour's, as Claude Code's own (claudeCacheTTL, pinned in cleanClaudeEnv),
+// since Anthropic refuses a 1h mark after a 5m one.
+func cacheMark1h() map[string]string {
+	return map[string]string{"type": "ephemeral", "ttl": "1h"}
 }
 
 // historyOpen and historyClose wrap the turns a run started anew is told
