@@ -164,6 +164,9 @@ type subscriptionRun struct {
 	settingsMu    sync.Mutex
 	safeguards    json.RawMessage
 	safeguardBeta string
+	clientMarks   bool
+	cacheTail     string
+	cachePrefix   cachePrefix
 	timer         *time.Timer
 
 	// Claude Code's input, kept open for the next turn; owner is the account
@@ -663,9 +666,28 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		}
 		log.Printf("claude: a new Claude Code is told the whole conversation: %d messages, %d images, the last turn marked as the one to answer", len(req.Messages), images)
 	}
+	req.clientCache.selected(from == nil)
+	var prompt []map[string]any
+	var prefix cachePrefix
+	if from != nil {
+		prefix = from.cachePrefix
+		prompt = renderClaudeTurn(req.Messages[len(req.Messages)-len(from.since):], req.Tools)
+	} else {
+		prompt, err = renderClaudePrompt(req)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		if req.clientCache != nil {
+			prefix = promptCachePrefix(prompt)
+		}
+	}
 	cmd := binary.command(context.Background(), args...)
 	cmd.Dir = work
 	env := netproxy.EnvWith(claudeProxy(ctx), cleanClaudeEnv(os.Environ()))
+	if req.clientCache != nil {
+		env = append(env, "DISABLE_PROMPT_CACHING=1")
+	}
 	if len(req.Safeguards) > 0 {
 		env = append(env, "ANTHROPIC_BETAS="+req.SafeguardBeta)
 	}
@@ -694,6 +716,8 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 
 	run := &subscriptionRun{bridge: b, token: token, model: model, cmd: cmd, tmp: tmp, schema: len(req.Format.schema()) > 0, pending: map[string]chan mcpToolResult{}, stdin: stdin, owner: owner, effort: req.Effort, sessions: sessions}
 	run.safeguardBeta = req.SafeguardBeta
+	run.clientMarks = req.clientCache != nil
+	run.cachePrefix = prefix
 	if user, _ := ownerAccount(owner); user != "" {
 		run.loginVersion = provider.ClaudeLoginVersion(user)
 	}
@@ -725,7 +749,7 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		run.readOutput(stdout)
 	}()
 
-	if len(req.Safeguards) > 0 || from != nil {
+	if len(req.Safeguards) > 0 || from != nil || run.clientMarks {
 		// Initialize the SDK before applying settings. Send the potentially
 		// large context over stdin rather than an environment entry. A
 		// Claude Code resumed from a saved session answers it only once
@@ -741,7 +765,6 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		run.abort()
 		return nil, nil, err
 	}
-	var prompt []map[string]any
 	if from != nil {
 		// the session is the run's now: its file goes when the run does,
 		// unless the run is shelved in turn
@@ -749,10 +772,6 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		run.mu.Lock()
 		run.sessionID = from.session
 		run.mu.Unlock()
-		prompt = renderClaudeTurn(req.Messages[len(req.Messages)-len(from.since):], req.Tools)
-	} else if prompt, err = renderClaudePrompt(req); err != nil {
-		run.abort()
-		return nil, nil, err
 	}
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": prompt}})
 	if err := run.tell(line); err != nil {
@@ -762,10 +781,18 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 	return run, segment, nil
 }
 
-// safeguardBody passes only the safety field through EXTRA_BODY: overriding the
-// CLI's own betas there would remove headers its genuine request needs.
+// safeguardBody is the safety-only form of the run's extra body.
 func safeguardBody(raw json.RawMessage) string {
+	return claudeExtraBody(raw, "")
+}
+
+// claudeExtraBody passes the safety field and opted-in cache tail through
+// EXTRA_BODY. It leaves the CLI's own beta headers intact.
+func claudeExtraBody(raw json.RawMessage, tail string) string {
 	body := map[string]any{}
+	if tail != "" {
+		body["cache_control"] = cacheMark(tail)
+	}
 	if len(raw) > 0 {
 		body["safeguards"] = raw
 	}
@@ -773,22 +800,28 @@ func safeguardBody(raw json.RawMessage) string {
 	return string(b)
 }
 
-// setSafeguards updates the caller's context, not the VPS's permission state.
+// setSafeguards updates the caller's safety context and opted-in cache tail.
+// It does not change the VPS's permission state.
 // A CLI unable to acknowledge the update is discarded by the caller; its old
 // context must never be used for another turn. The client's approval still
 // decides whether the tool runs, including a server verdict that is unavailable.
 func (r *subscriptionRun) setSafeguards(req *Request) error {
 	r.settingsMu.Lock()
 	defer r.settingsMu.Unlock()
-	if bytes.Equal(r.safeguards, req.Safeguards) && (len(req.Safeguards) == 0 || r.safeguardBeta == req.SafeguardBeta) {
+	tail := req.cacheTail()
+	if r.clientMarks != (req.clientCache != nil) || !r.cachePrefix.accepts(tail) {
+		return errors.New("client cache marks changed; restart Claude Code")
+	}
+	if r.cacheTail == tail && bytes.Equal(r.safeguards, req.Safeguards) && (len(req.Safeguards) == 0 || r.safeguardBeta == req.SafeguardBeta) {
 		return nil
 	}
 	if len(req.Safeguards) > 0 && r.safeguardBeta != req.SafeguardBeta {
 		return errors.New("safety beta changed; restart Claude Code")
 	}
 	err := r.cliControl(map[string]any{"subtype": "apply_flag_settings", "settings": map[string]any{
-		"env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": safeguardBody(req.Safeguards)}}})
+		"env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": claudeExtraBody(req.Safeguards, tail)}}})
 	if err == nil {
+		r.cacheTail = tail
 		r.safeguards = bytes.Clone(req.Safeguards)
 	}
 	return err
@@ -887,6 +920,7 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	if run == nil {
 		return nil, nil
 	}
+	req.clientCache.selected(false)
 	if back != "" {
 		if err := run.rewind(back); err != nil {
 			log.Printf("claude: a run that went on with a side question could not be taken back to the conversation's turn, let go: %v", err)
@@ -1027,6 +1061,7 @@ func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *loos
 	}
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), req.WebSearch, req.Format.schema(), start)
+	cacheIdentity(h, req)
 	hashMessages(h, msgs[:start], nil)
 	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), runs: heardRuns(msgs[start:], sealed)}
 	words := messageWords(msgs)
@@ -1336,6 +1371,8 @@ type savedSession struct {
 	timer    *time.Timer
 	since    []Message // the turn's messages, once unshelved
 
+	cachePrefix cachePrefix
+
 	mu   sync.Mutex
 	gone bool // taken by a run, or discarded
 }
@@ -1351,7 +1388,7 @@ func (b *subscriptionBridge) shelve(run *subscriptionRun) {
 		return
 	}
 	key := run.idleKey
-	s := &savedSession{session: sid, sessions: sessions, owner: run.owner, conv: run.convKey, key: key, loose: run.loose, tools: tools, at: run.idleAt}
+	s := &savedSession{session: sid, sessions: sessions, owner: run.owner, conv: run.convKey, key: key, loose: run.loose, tools: tools, at: run.idleAt, cachePrefix: run.cachePrefix}
 	if old := b.shelf[key]; old != nil {
 		go old.discard()
 	}
@@ -1405,6 +1442,10 @@ func (b *subscriptionBridge) unshelve(req *Request, owner string) *savedSession 
 		return nil
 	}
 	s.timer.Stop()
+	if !s.cachePrefix.accepts(req.cacheTail()) {
+		s.discard()
+		return nil
+	}
 	s.since = since
 	return s
 }
@@ -1746,6 +1787,7 @@ func turnKey(owner string, req *Request, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
 	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s\x00%t\x00%s", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, withoutBillingHeader(req.System), tools, req.WebSearch, req.Format.schema())
+	cacheIdentity(h, req)
 	hashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -2484,7 +2526,23 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	var text strings.Builder
 	if req.System != "" || req.ToolChoice == "required" || strings.HasPrefix(req.ToolChoice, "name:") {
 		text.WriteString("<external_system_instructions>\n")
-		text.WriteString(withoutBillingHeader(req.System))
+		system := withoutBillingHeader(req.System)
+		pos := 0
+		if c := req.clientCache; c != nil {
+			cut := len(req.System) - len(system)
+			for _, mark := range c.system {
+				end := mark.End - cut
+				if end <= pos || end > len(system) {
+					c.droppedSystem++
+					continue
+				}
+				text.WriteString(system[pos:end])
+				blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": cacheMark(mark.TTL)})
+				text.Reset()
+				pos = end
+			}
+		}
+		text.WriteString(system[pos:])
 		switch {
 		case req.ToolChoice == "required":
 			text.WriteString("\nYou must call at least one available tool before answering.")
@@ -2499,7 +2557,11 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		// instructions) found nothing cached past Claude Code's own prompt.
 		// The mark's TTL is the one Claude Code uses (claudeCacheTTL, pinned
 		// in cleanClaudeEnv): Anthropic refuses a 1h mark after a 5m one.
-		blocks = append(blocks, map[string]any{"type": "text", "text": text.String(), "cache_control": cacheMark1h()})
+		block := map[string]any{"type": "text", "text": text.String()}
+		if req.clientCache == nil {
+			block["cache_control"] = cacheMark1h()
+		}
+		blocks = append(blocks, block)
 		text.Reset()
 	}
 	instructions := len(blocks) - 1
@@ -2534,7 +2596,7 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 			label = "Assistant"
 		}
 		text.WriteString(label + ": ")
-		blocks = renderParts(blocks, &text, m.Parts, offered)
+		blocks = renderCachedParts(blocks, &text, m.Parts, offered, req.clientCache != nil)
 		text.WriteString("\n\n")
 		if i+1 <= chunked && (i+1)%historyChunk == 0 {
 			blocks = append(blocks, map[string]any{"type": "text", "text": text.String()})
@@ -2553,7 +2615,18 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 	// Anthropic's 20-block lookback, instead of writing all of it again.
 	// The turn to answer is never chunked when there is a history: a later
 	// run whose history ends further on tells those messages in it.
-	if chunk >= 0 {
+	if c := req.clientCache; c != nil {
+		c.fresh = true
+		if chunk >= 0 && c.count < 4 && blocks[chunk]["cache_control"] == nil {
+			ttl := "1h"
+			for _, b := range blocks[:chunk] {
+				if cc, ok := b["cache_control"].(map[string]string); ok {
+					ttl = shorterTTL(ttl, cacheTTL(cc))
+				}
+			}
+			blocks[chunk]["cache_control"] = cacheMark(ttl)
+		}
+	} else if chunk >= 0 {
 		if instructions >= 0 {
 			delete(blocks[instructions], "cache_control")
 		}
@@ -2671,6 +2744,10 @@ func renderClaudeTurn(msgs []Message, tools []Tool) []map[string]any {
 // task (#1878). Only the message's parts say where the result ends; what the
 // tool wrote stays inside it, whatever it says.
 func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part, offered map[string]bool) []map[string]any {
+	return renderCachedParts(blocks, text, parts, offered, false)
+}
+
+func renderCachedParts(blocks []map[string]any, text *strings.Builder, parts []Part, offered map[string]bool, cached bool) []map[string]any {
 	open := "" // the tool result told last, not closed yet
 	for _, p := range parts {
 		if open != "" && (p.Kind == Text || p.Kind == File) {
@@ -2699,6 +2776,11 @@ func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part, o
 			}
 		case Image:
 			blocks = imageBlocks(blocks, text, p)
+		}
+		if cached && p.cache != "" {
+			blocks = closeBlocks(blocks, text)
+			text.Reset()
+			blocks[len(blocks)-1]["cache_control"] = cacheMark(p.cache)
 		}
 	}
 	return blocks
@@ -3622,6 +3704,7 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 			// effort can think past that (#250)
 			req.Effort = "low"
 		}
+		req.clientCache.selected(from == nil)
 		dir, _, err := p.Account.Token(ctx)
 		if err != nil {
 			if from != nil {
@@ -3674,11 +3757,20 @@ var ratelimitWindows = map[string]string{
 // on them.
 func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from provider.Protocol, name, model, owner string, body []byte, usage *Usage,
 	start func(ctx context.Context, req *Request) (*subscriptionRun, <-chan Event, error)) (int, string) {
-	req, err := parse(from, body)
+	var req *Request
+	var err error
+	if name == "Claude Code" && wantsClientCache(r, from) {
+		req, err = parseAnthropicRequest(body, true)
+	} else {
+		req, err = parse(from, body)
+	}
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
 	req.Model = model
+	if req.clientCache != nil {
+		req.clientCache.report = func() { cacheReportReady(w, req) }
+	}
 	if req.Format != nil && req.Format.schema() == nil {
 		// --json-schema takes a schema only: any JSON object is asked for
 		// in words
@@ -3713,6 +3805,9 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	// the turn they were for: this request is its own conversation from
 	// here and gets a run of its own, told it whole. A 409 isn't retried,
 	// and the fork died with it (ylorn on Discord).
+	if run != nil && run.clientMarks != (req.clientCache != nil) {
+		run, how = nil, "cache mode changed"
+	}
 	if run != nil && !run.claimResume() {
 		run, how = nil, answeredElsewhere
 	}
@@ -3744,6 +3839,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	}
 	var events <-chan Event
 	if run != nil {
+		req.clientCache.selected(false)
 		if name == "Claude Code" {
 			err = run.setSafeguards(req)
 		}
@@ -3795,6 +3891,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	if err != nil {
 		return writeError(w, from, 502, name+": "+err.Error()), err.Error()
 	}
+	cacheDropped(w, req)
 	run.heard(req.Messages)
 	// a caller gone before the reply is whole won't carry it on: its agent
 	// is stopped at once, not left to answer no one and wait on tool calls

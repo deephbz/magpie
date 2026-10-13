@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"slices"
@@ -1729,6 +1730,9 @@ type keptAlive struct {
 	// it asked; streams, whether it asked for a stream
 	told    time.Time
 	streams bool
+	// Only opted-in Claude cache reporting can defer initial keepalives.
+	// Selection releases it before process startup; expiry keeps the stream alive.
+	cacheReportUntil time.Time
 }
 
 // agentQuietMost is the longest a streaming Responses agent goes with no
@@ -1762,6 +1766,15 @@ func (h *holdWriter) keepAlive() {
 		return
 	}
 	if !a.sent {
+		if !a.cacheReportUntil.IsZero() {
+			if time.Now().Before(a.cacheReportUntil) {
+				return
+			}
+			a.cacheReportUntil = time.Time{}
+			h.header.Del("X-Magpie-Cache-Marks-Dropped")
+			h.notes.Del("X-Magpie-Cache-Marks-Dropped")
+			log.Printf("claude: cache-mark report timed out before run selection; streaming without the dropped-mark header")
+		}
 		// the try's header is whole once it has its status (WriteHeader,
 		// under mu); before, the vendor's are still being copied into it
 		// from the try's goroutine, and only magpie's notes are read

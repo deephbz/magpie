@@ -67,6 +67,8 @@ type Part struct {
 
 	// web_search: Text is the query
 	Hits []Hit
+
+	cache string // opted-in Claude bridge breakpoint TTL; empty for none
 }
 
 // The APIs a Part's Sealed reasoning is in.
@@ -142,6 +144,9 @@ type Tool struct {
 
 // Request is a call to a model, whichever API it arrived in.
 type Request struct {
+	// clientCache is non-nil only for the Claude bridge's explicit opt-in.
+	clientCache *clientCache
+
 	Model      string
 	System     string
 	Messages   []Message

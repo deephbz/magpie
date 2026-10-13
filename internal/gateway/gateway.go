@@ -1902,6 +1902,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// whole list still finds a Codex account to spend a reset on
 	all := cands
 	cands = probeOne(cands)
+	var cacheReport *Request
+	if wantsClientCache(r, from) && slices.ContainsFunc(cands, func(c candidate) bool { return c.p.Account != nil && c.p.Account.Agent == "claude" }) {
+		var err error
+		cacheReport, err = parseAnthropicRequest(body, true)
+		if err != nil {
+			call.Status, call.Error = 400, err.Error()
+			writeError(w, from, 400, err.Error())
+			turnedAway()
+			return
+		}
+		// Tool drops are known before a queue or slow run selection can
+		// send streaming headers. Message drops wait for that selection.
+		cacheReport.clientCache.fresh = true
+	}
 	shown := aff
 	if len(cands) == 1 && aff.Why != "strict" {
 		shown = nil // nobody else to stay away from; strict left one alone (#1797)
@@ -1996,6 +2010,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// for a reply that only reasoned to be asked again (#667).
 		hw.thinkingShown = !refusesAfterThinking(c.model) || last && modelFamily(c.model) != ""
 		hw.ctx, hw.alive, hw.streams = r.Context(), kept, streams
+		report := cacheReport
+		if c.p.Account == nil || c.p.Account.Agent != "claude" {
+			report = nil
+		}
+		cacheReportTry(hw, report)
 		if streams && !settings.Load().NoLoopGuard {
 			// a reply stuck in a loop is ended, not let run to its limit
 			// (#1359)

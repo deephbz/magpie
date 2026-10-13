@@ -72,17 +72,19 @@ func (b aBlock) MarshalJSON() ([]byte, error) {
 var ephemeral = map[string]string{"type": "ephemeral"}
 
 type aRequest struct {
-	Model    string          `json:"model"`
-	System   json.RawMessage `json:"system,omitempty"`
-	Messages []struct {
+	Model        string          `json:"model"`
+	System       json.RawMessage `json:"system,omitempty"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	Messages     []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
 	Tools []struct {
-		Type        string          `json:"type,omitempty"`
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		InputSchema json.RawMessage `json:"input_schema,omitempty"`
+		Type         string          `json:"type,omitempty"`
+		Name         string          `json:"name"`
+		Description  string          `json:"description,omitempty"`
+		InputSchema  json.RawMessage `json:"input_schema,omitempty"`
+		CacheControl json.RawMessage `json:"cache_control,omitempty"`
 	} `json:"tools,omitempty"`
 	ToolChoice *struct {
 		Type                   string `json:"type"`
@@ -111,12 +113,23 @@ type aRequest struct {
 }
 
 func parseAnthropic(body []byte) (*Request, error) {
+	return parseAnthropicRequest(body, false)
+}
+
+func parseAnthropicRequest(body []byte, clientMarks bool) (*Request, error) {
 	var a aRequest
 	if err := decodeJSON(body, &a); err != nil {
 		return nil, fmt.Errorf("invalid request: %v", err)
 	}
 	r := &Request{Model: a.Model, System: stringOrText(a.System), MaxTokens: a.MaxTokens,
 		Temp: a.Temperature, TopP: a.TopP, Stop: a.StopSequences, Stream: a.Stream, Fast: a.Speed == "fast"}
+	if clientMarks {
+		var err error
+		r.clientCache, err = readClientCache(a)
+		if err != nil {
+			return nil, err
+		}
+	}
 	r.Safeguards = a.Safeguards
 	if string(r.Safeguards) == "null" {
 		r.Safeguards = nil
@@ -127,7 +140,7 @@ func parseAnthropic(body []byte) (*Request, error) {
 	if oc := a.OutputConfig; oc != nil && oc.Format != nil && oc.Format.Type == "json_schema" && len(oc.Format.Schema) > 0 {
 		r.Format = &Format{Type: "json_schema", Name: formatName, Schema: oc.Format.Schema}
 	}
-	for _, m := range a.Messages {
+	for mi, m := range a.Messages {
 		msg := Message{Role: m.Role}
 		var s string
 		if decodeJSON(m.Content, &s) == nil {
@@ -141,6 +154,7 @@ func parseAnthropic(body []byte) (*Request, error) {
 			}
 			var raws []json.RawMessage // each block as the client sent it
 			for i, b := range blocks {
+				before := len(msg.Parts)
 				switch b.Type {
 				case "text":
 					msg.Parts = append(msg.Parts, Part{Kind: Text, Text: b.Text})
@@ -164,6 +178,15 @@ func parseAnthropic(body []byte) (*Request, error) {
 					}
 					if i < len(raws) {
 						msg.Parts = append(msg.Parts, Part{Kind: Thinking, Sealed: raws[i], SealedBy: sealAnthropic})
+					}
+				}
+				if clientMarks && !(mi == len(a.Messages)-1 && i == len(blocks)-1) {
+					if ttl := cacheTTL(b.CacheControl); ttl != "" {
+						if len(msg.Parts) > before && renderedCacheBlock(b) {
+							msg.Parts[len(msg.Parts)-1].cache = ttl
+						} else {
+							r.clientCache.droppedMessages++
+						}
 					}
 				}
 			}
