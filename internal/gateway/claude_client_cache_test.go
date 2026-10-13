@@ -358,42 +358,65 @@ func TestClaudeClientCacheUsage(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for Claude Code")
 	}
-	dir := t.TempDir()
-	testenv.Program(t, filepath.Join(dir, "claude"), `#!/bin/sh
+	for _, tc := range []struct {
+		name        string
+		write, hour int
+		split       string
+	}{
+		{"mixed", 40, 29, `,"cache_creation":{"ephemeral_5m_input_tokens":11,"ephemeral_1h_input_tokens":29}`},
+		// The pure-5m counts come from the live omitted-TTL probe.
+		{"pure5m", 1894, 0, `,"cache_creation":{"ephemeral_5m_input_tokens":1894,"ephemeral_1h_input_tokens":0}`},
+		{"reportedZero", 0, 0, `,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}`},
+		{"unreported", 40, 0, ""},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream_%t", tc.name, stream), func(t *testing.T) {
+				dir := t.TempDir()
+				u := fmt.Sprintf(`{"input_tokens":12,"cache_read_input_tokens":300,"cache_creation_input_tokens":%d%s,"output_tokens":1}`, tc.write, tc.split)
+				testenv.Program(t, filepath.Join(dir, "claude"), `#!/bin/sh
 while read -r line; do
  case $line in *'"type":"control_request"'*)
   id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
   echo '{"type":"control_response","response":{"subtype":"success","request_id":"'$id'"}}'
   continue ;;
  esac
- echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":12,"cache_read_input_tokens":300,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":11,"ephemeral_1h_input_tokens":29},"output_tokens":1}}}}'
+ echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":`+u+`}}}'
  echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}}'
  echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}}'
  echo '{"type":"stream_event","event":{"type":"message_stop"}}'
  echo '{"type":"result","subtype":"success","is_error":false,"result":""}'
 done
 `)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	runsEndWithTest(t, dir)
-	s := New()
-	t.Cleanup(s.subscription.abortAll)
-	p := provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "u"}}
-	for _, stream := range []bool{false, true} {
-		body := fmt.Sprintf(`{"model":"claude-sonnet-5","max_tokens":100,"stream":%t,"cache_control":{"type":"ephemeral"},"messages":[{"role":"user","content":"hi"}]}`, stream)
-		r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
-		r.Header.Set("X-Magpie-Cache-Marks", "client")
-		w := httptest.NewRecorder()
-		var usage Usage
-		if code, msg := s.serveClaudeSubscription(w, r, provider.Anthropic, p, "claude-sonnet-5", []byte(body), &usage); code != 200 {
-			t.Fatalf("%d %s", code, msg)
-		}
-		if usage.CacheWrite != 40 || usage.CacheWrite1h != 29 || usage.CacheRead != 300 {
-			t.Fatalf("cache usage changed: %+v", usage)
-		}
-		for _, want := range []string{`"ephemeral_5m_input_tokens":11`, `"ephemeral_1h_input_tokens":29`} {
-			if !strings.Contains(w.Body.String(), want) {
-				t.Fatalf("stream=%t: missing %s from %s", stream, want, w.Body)
-			}
+				t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+				runsEndWithTest(t, dir)
+				s := New()
+				t.Cleanup(s.subscription.abortAll)
+				p := provider.Provider{ID: "claude", Account: &provider.Account{Agent: "claude", User: "u"}}
+				body := fmt.Sprintf(`{"model":"claude-sonnet-5","max_tokens":100,"stream":%t,"cache_control":{"type":"ephemeral"},"messages":[{"role":"user","content":"hi"}]}`, stream)
+				r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+				r.Header.Set("X-Magpie-Cache-Marks", "client")
+				w := httptest.NewRecorder()
+				var usage Usage
+				if code, msg := s.serveClaudeSubscription(w, r, provider.Anthropic, p, "claude-sonnet-5", []byte(body), &usage); code != 200 {
+					t.Fatalf("%d %s", code, msg)
+				}
+				if usage.CacheWrite != tc.write || usage.CacheWrite1h != tc.hour || usage.CacheRead != 300 {
+					t.Fatalf("cache usage changed: %+v", usage)
+				}
+				if tc.split == "" {
+					if strings.Contains(w.Body.String(), `"cache_creation":`) {
+						t.Fatalf("invented TTL split: %s", w.Body)
+					}
+				} else {
+					want := strings.TrimPrefix(tc.split, ",")
+					if !strings.Contains(w.Body.String(), want) {
+						t.Fatalf("missing %s from %s", want, w.Body)
+					}
+					if stream && strings.Count(w.Body.String(), want) != 2 {
+						t.Fatalf("TTL split must survive to message_delta: %s", w.Body)
+					}
+				}
+			})
 		}
 	}
 }

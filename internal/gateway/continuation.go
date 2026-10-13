@@ -361,7 +361,7 @@ func (s *Server) streamTranslated(w http.ResponseWriter, r *http.Request, p prov
 			u.add(Usage{Served: ev.Model}) // the model the vendor says answered
 		case KUsage:
 			this.add(ev.Usage)
-			ev.Usage = ev.Usage.plus(before, true)
+			ev.Usage = ev.Usage.carryUpdate(this, before)
 			u.add(ev.Usage)
 		case KStop:
 			stop = ev.Stop

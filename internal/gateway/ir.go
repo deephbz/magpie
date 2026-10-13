@@ -311,7 +311,14 @@ type Usage struct {
 	// 5-minute write is 1.25×, when its usage says so (cache_creation's
 	// ephemeral_1h_input_tokens)
 	CacheWrite1h int `json:"cache_write_1h,omitempty"`
-	Reasoning    int `json:"reasoning"`
+	// cacheCreationReported distinguishes a reported zero or pure-5m split
+	// from usage that did not report TTLs. It is wire evidence, not a counter.
+	cacheCreationReported bool
+	// cacheCreationHasCounts describes the parsed update's own split.
+	// It is never accumulated from earlier usage.
+	cacheCreationHasCounts bool
+
+	Reasoning int `json:"reasoning"`
 	// Served: the model the vendor's reply says answered, when it named
 	// one — which may not be the one it was asked for
 	Served string `json:"served,omitempty"`
@@ -376,6 +383,7 @@ func (u *Usage) add(v Usage) {
 	if v.CacheWrite1h > 0 {
 		u.CacheWrite1h = v.CacheWrite1h
 	}
+	u.cacheCreationReported = u.cacheCreationReported || v.cacheCreationReported
 	if v.Reasoning > 0 {
 		u.Reasoning = v.Reasoning
 	}

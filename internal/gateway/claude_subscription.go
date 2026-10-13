@@ -2039,7 +2039,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 	usage := func(u cliUsage) Usage {
 		v := u.gateway()
 		this.add(v)
-		return v.plus(before, true)
+		return v.carryUpdate(this, before)
 	}
 	// A stream Anthropic cut short (a dropped connection, a stall) Claude
 	// Code ends with a message_stop of its own and no message_delta, and
@@ -2503,11 +2503,33 @@ func claudeLimits(raw json.RawMessage) []provider.ClaudeLimit {
 	return out
 }
 
+// carryUpdate keeps this message's known 1h writes when a partial split
+// reports only 5m counts, then adds usage from earlier messages.
+func (u Usage) carryUpdate(this, before Usage) Usage {
+	if u.CacheWrite1h == 0 && u.cacheCreationHasCounts {
+		u.CacheWrite1h = this.CacheWrite1h
+	}
+	return u.plus(before, true)
+}
+
 func (u Usage) plus(v Usage, only bool) Usage {
-	for _, f := range []struct{ a, b *int }{{&u.Input, &v.Input}, {&u.Output, &v.Output}, {&u.CacheRead, &v.CacheRead}, {&u.CacheWrite, &v.CacheWrite}, {&u.CacheWrite1h, &v.CacheWrite1h}, {&u.Reasoning, &v.Reasoning}} {
+	if only && u.CacheWrite > 0 && !u.cacheCreationHasCounts && u.CacheWrite1h == 0 {
+		u.cacheCreationReported = false
+	}
+	for _, f := range []struct{ a, b *int }{{&u.Input, &v.Input}, {&u.Output, &v.Output}, {&u.CacheRead, &v.CacheRead}, {&u.Reasoning, &v.Reasoning}} {
 		if *f.a > 0 || !only {
 			*f.a += *f.b
 		}
+	}
+	writes := u.CacheWrite > 0
+	if writes || !only {
+		u.CacheWrite += v.CacheWrite
+	}
+	if u.CacheWrite1h > 0 || u.cacheCreationHasCounts || !only {
+		u.CacheWrite1h += v.CacheWrite1h
+	}
+	if !only {
+		u.cacheCreationReported = u.cacheCreationReported || v.cacheCreationReported
 	}
 	return u
 }
@@ -2515,6 +2537,8 @@ func (u Usage) plus(v Usage, only bool) Usage {
 func (u cliUsage) gateway() Usage {
 	out := Usage{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, Reasoning: u.OutputDetails.Thinking}
 	if c := u.CacheCreation; c != nil {
+		out.cacheCreationReported = true
+		out.cacheCreationHasCounts = c.Ephemeral5m+c.Ephemeral1h > 0
 		out.CacheWrite = max(out.CacheWrite, c.Ephemeral5m+c.Ephemeral1h)
 		out.CacheWrite1h = c.Ephemeral1h
 	}
