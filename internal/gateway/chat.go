@@ -31,6 +31,20 @@ type cToolCall struct {
 	ExtraContent json.RawMessage `json:"extra_content,omitempty"`
 }
 
+type cTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		Parameters  json.RawMessage `json:"parameters,omitempty"`
+		Strict      *bool           `json:"strict,omitempty"`
+	} `json:"function"`
+}
+
+func (t cTool) tool() Tool {
+	return Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters, Strict: t.Function.Strict != nil && *t.Function.Strict}
+}
+
 type cRequest struct {
 	Model    string `json:"model"`
 	Messages []struct {
@@ -41,16 +55,9 @@ type cRequest struct {
 		ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 		ToolCalls        []cToolCall     `json:"tool_calls,omitempty"`
 		ToolCallID       string          `json:"tool_call_id,omitempty"`
+		Tools            []cTool         `json:"tools,omitempty"`
 	} `json:"messages"`
-	Tools []struct {
-		Type     string `json:"type"`
-		Function struct {
-			Name        string          `json:"name"`
-			Description string          `json:"description,omitempty"`
-			Parameters  json.RawMessage `json:"parameters,omitempty"`
-			Strict      *bool           `json:"strict,omitempty"`
-		} `json:"function"`
-	} `json:"tools,omitempty"`
+	Tools               []cTool         `json:"tools,omitempty"`
 	ToolChoice          json.RawMessage `json:"tool_choice,omitempty"`
 	WebSearchOptions    json.RawMessage `json:"web_search_options,omitempty"`
 	MaxTokens           int             `json:"max_tokens,omitempty"`
@@ -88,10 +95,33 @@ func parseChat(body []byte) (*Request, error) {
 		decodeJSON(c.Stop, &r.Stop)
 	}
 	var sys []string
+	var leadingTools []Tool
+	leading := true
 	for _, m := range c.Messages {
+		if m.Role != "system" && m.Role != "developer" {
+			leading = false
+		}
 		switch m.Role {
 		case "system", "developer":
-			sys = append(sys, stringOrText(m.Content))
+			text := stringOrText(m.Content)
+			msg := Message{Role: "system", ChatSystem: true, Parts: []Part{{Kind: Text, Text: text}}}
+			for _, t := range m.Tools {
+				if t.Type == "" || t.Type == "function" {
+					msg.Tools = append(msg.Tools, t.tool())
+				}
+			}
+			if leading {
+				sys = append(sys, text)
+				r.chatSystemSet = true
+				leadingTools = append(leadingTools, msg.Tools...)
+				continue
+			}
+			if n := len(r.Messages); n > 0 && r.Messages[n-1].ChatSystem {
+				r.Messages[n-1].Parts = append(r.Messages[n-1].Parts, msg.Parts...)
+				r.Messages[n-1].Tools = append(r.Messages[n-1].Tools, msg.Tools...)
+			} else {
+				r.Messages = append(r.Messages, msg)
+			}
 		case "user":
 			r.Messages = append(r.Messages, Message{Role: "user", Parts: chatParts(m.Content)})
 		case "assistant":
@@ -126,8 +156,9 @@ func parseChat(body []byte) (*Request, error) {
 		if t.Type != "" && t.Type != "function" {
 			continue
 		}
-		r.Tools = append(r.Tools, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters, Strict: t.Function.Strict != nil && *t.Function.Strict})
+		r.Tools = append(r.Tools, t.tool())
 	}
+	r.Tools = addTools(r.Tools, leadingTools)
 	var tc string
 	if decodeJSON(c.ToolChoice, &tc) == nil {
 		r.ToolChoice = tc
@@ -246,6 +277,7 @@ func chatReplaysReasoning(host, model string) bool {
 }
 
 func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
+	r = r.hoisted()
 	var msgs []map[string]any
 	if r.System != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": r.System})

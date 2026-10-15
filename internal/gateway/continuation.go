@@ -458,7 +458,7 @@ func (s *Server) streamTranslated(w http.ResponseWriter, r *http.Request, p prov
 			} else {
 				dec := decoder(actual)
 				attemptSee := see
-				if names := textCallNames(request.Tools); names != nil {
+				if names := textCallNames(request.hoisted().Tools); names != nil {
 					t := &textCallSee{names: names, see: see}
 					attemptSee, held = t.event, t.release
 				}

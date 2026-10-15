@@ -212,7 +212,7 @@ func (s *Server) serveCursor(w http.ResponseWriter, r *http.Request, from provid
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
 	// the vendor's own API is told the answer's format in words
-	req = req.inSystem()
+	req = req.hoisted().inSystem()
 	req.Model = model
 	if conv := cursorConversation(r.Header, req.CacheKey, body); conv != "" {
 		r = r.WithContext(context.WithValue(r.Context(), cursorConvKey{}, conv))

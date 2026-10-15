@@ -140,7 +140,7 @@ func searchesFor(p provider.Provider, proto provider.Protocol, model string, req
 	if searchesModel(p, proto, model) {
 		return true
 	}
-	return codeAssistSearches(p, proto, model) && (len(req.Tools) == 0 || req.ToolChoice == "none")
+	return codeAssistSearches(p, proto, model) && (len(req.hoisted().Tools) == 0 || req.ToolChoice == "none")
 }
 
 // searchesModel is searchesItself for one model: a Remote magpie searches

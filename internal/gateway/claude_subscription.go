@@ -3801,6 +3801,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
+	req = req.hoisted()
 	req.Model = model
 	if req.Format != nil && req.Format.schema() == nil {
 		// --json-schema takes a schema only: any JSON object is asked for

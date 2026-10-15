@@ -35,6 +35,7 @@ type aBlock struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
+	Tool  json.RawMessage `json:"tool,omitempty"` // inline tool definition
 	// tool_result
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
@@ -763,8 +764,9 @@ func imageBlock(p Part) aBlock {
 
 // aMessage is one message of a request built for a Messages upstream.
 type aMessage struct {
-	Role    string   `json:"role"`
-	Content []aBlock `json:"content"`
+	Role    string     `json:"role"`
+	Content []aBlock   `json:"content"`
+	before  []aMessage // Chat updates held until this assistant turn
 }
 
 // interruptedTool is what an unanswered call gets, as pairToolMessages and
@@ -780,23 +782,38 @@ func buildAnthropic(r *Request, model string) []byte {
 // a turn's thinking back (anthropicReplaysThinking), thinking with no
 // signature goes as its text instead of being left out.
 func anthropicBody(r *Request, model string, replay bool) []byte {
-	if r.Format != nil && r.Format.schema() == nil {
-		// output_config.format takes a schema only: any JSON object is
-		// asked for in words
+	return anthropicUpdateBody(r.hoisted(), model, replay)
+}
+
+func anthropicUpdateBody(r *Request, model string, replay bool) []byte {
+	original := r
+	if r.Format != nil && (r.Format.asText || r.Format.schema() == nil) {
+		// output_config.format takes a schema only. Any JSON object, or
+		// a format already refused by this model, is asked for in words.
 		r = r.inSystem()
 	}
-	var msgs []aMessage
+	var msgs, held []aMessage
 	push := func(role string, blocks []aBlock) {
 		if len(blocks) == 0 {
 			return
 		}
-		if n := len(msgs); n > 0 && msgs[n-1].Role == role {
+		var before []aMessage
+		if role == "assistant" {
+			before, held = held, nil
+		}
+		if n := len(msgs); n > 0 && msgs[n-1].Role == role && len(before) == 0 {
 			msgs[n-1].Content = append(msgs[n-1].Content, blocks...)
 			return
 		}
-		msgs = append(msgs, aMessage{Role: role, Content: blocks})
+		msgs = append(msgs, aMessage{Role: role, Content: blocks, before: before})
 	}
 	for _, m := range r.Messages {
+		if m.ChatSystem {
+			if blocks := chatSystemBlocks(m); len(blocks) > 0 {
+				held = append(held, aMessage{Role: "system", Content: blocks})
+			}
+			continue
+		}
 		var results, rest []aBlock
 		for _, p := range m.Parts {
 			switch p.Kind {
@@ -847,13 +864,22 @@ func anthropicBody(r *Request, model string, replay bool) []byte {
 	// turn was interrupted, a result whose call it dropped — is mended, as
 	// the Chat and Responses paths mend theirs, where Anthropic refuses it
 	msgs = pairToolBlocks(msgs)
+	if r.hasChatUpdates() {
+		var ok bool
+		msgs, ok = insertChatUpdates(msgs, held)
+		if !ok {
+			return anthropicBody(original, model, replay)
+		}
+	}
 	// Anthropic caches a prompt only up to a block marked for it, which a
 	// request from another API (Codex's, a Chat client's) never has: the
 	// conversation so far is marked at its last block, so the next turn,
 	// which only adds to it, reads it from the cache; thinking can't be
-	// marked. Two marks at most, with the one Claude's sign-in adds kept
-	// within Anthropic's four.
-	if n := len(msgs); n > 0 {
+	// marked. Ordinary requests use at most two marks. Chat updates add
+	// a persistent guard for at most three, leaving one decorator slot.
+	if r.hasChatUpdates() {
+		markChatUpdates(msgs)
+	} else if n := len(msgs); n > 0 {
 		c := msgs[n-1].Content
 		for i := len(c) - 1; i >= 0; i-- {
 			if c[i].Type != "thinking" && c[i].Type != "redacted_thinking" {
@@ -935,13 +961,7 @@ func anthropicBody(r *Request, model string, replay bool) []byte {
 	if len(r.Tools) > 0 || r.WebSearch {
 		var tools []map[string]any
 		for _, t := range r.Tools {
-			schema := t.Schema
-			if len(schema) == 0 {
-				schema = json.RawMessage(`{"type":"object","properties":{}}`)
-			} else {
-				schema = objectSchema(schema)
-			}
-			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description, "input_schema": schema})
+			tools = append(tools, anthropicTool(t))
 		}
 		if r.System == "" && len(tools) > 0 {
 			tools[len(tools)-1]["cache_control"] = ephemeral

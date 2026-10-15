@@ -3321,6 +3321,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	// on every turn, and on a provider serving Responses each went out as
 	// Chat (#997, Xiaomi MiMo)
 	ownAPI := false
+	if relay && from == provider.Chat && !p.IsRemoteMagpie() && chatNeedsTranslation(body) {
+		relay, ownAPI = false, true
+	}
 	// except a subagent's task its lead sealed (#1109): only the server
 	// that sealed it reads it, and a translation would drop it
 	if relay && searchAsked(from, body) && (from == provider.Chat && !p.IsRemoteMagpie() || !searchesModel(p, from, model)) && !(from == provider.Responses && hasSealedAgentMessage(body)) {
@@ -3459,6 +3462,11 @@ func markAntigravityRefused(w http.ResponseWriter, p provider.Provider, system, 
 // 403 or 400 it can mend (Provider.Retry) is asked again, a few times at most.
 func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (*http.Response, error) {
 	res, err := s.forwardOnce(ctx, p, to, path, body, in)
+	if nativeChatRequest(ctx) {
+		// The IR caller owns retries for inline definitions. Generic shape
+		// retries could delete the only definition of an added tool.
+		return res, err
+	}
 	if err == nil && (res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusBadRequest) && p.Retries() {
 		// an account that can mend what the refusal names (a Factory org
 		// the server won't take; a model Copilot's Auto picked that the
@@ -3523,8 +3531,8 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// built, with the model named as the vendor names it; before the
 		// shapes a provider refused are taken out, as it asks a display
 		body = adaptiveThinking(body)
-		body = s.withoutRefusedShapes(p, body)
-		if isKimi(p, to) {
+		body = s.withoutRefusedShapesKeepingUpdates(p, body, nativeChatRequest(ctx))
+		if isKimi(p, to) && !nativeChatRequest(ctx) {
 			// Claude Code's deferred-tool blocks, for which Kimi's
 			// Anthropic endpoint turns the whole request away with a 400
 			// that names nothing to learn from (#2042)
@@ -3533,6 +3541,9 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		body = thinkingOffAsTaken(body, path)
 		body = samplingAsTaken(body, path)
 		asked := askedBetas(in)
+		if nativeChatRequest(ctx) && hasToolAddition(body) {
+			asked = append(asked, inlineToolsBeta)
+		}
 		if gjson.GetBytes(body, "speed").String() == "fast" && provider.HostOf(p.Base(to)) == "api.anthropic.com" {
 			asked = append(slices.Clone(asked), claudeFastBeta) // a group's member sent fast
 		}
@@ -3646,6 +3657,10 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	}
 	if to == provider.Anthropic {
 		s.fitUserBetas(p, req.Header)
+		if nativeChatRequest(ctx) && (!s.chatUpdatesFit(p, gjson.GetBytes(body, "model").String()) ||
+			hasToolAddition(body) && !slices.ContainsFunc(strings.Split(req.Header.Get("anthropic-beta"), ","), func(b string) bool { return strings.TrimSpace(b) == inlineToolsBeta })) {
+			return nil, errChatUpdatesFold
+		}
 	}
 	sent := len(body)
 	if p.Account != nil && p.Account.Agent == "codex" {
@@ -4516,7 +4531,15 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 	imageTried := false
 	// Gemini's thinking levels turned away this time (geminiRefusedLevel)
 	var levelsRefused []string
+	chatUpdates := req.hasChatUpdates()
+	wire := provider.UpstreamNameIn(wires, p.ID, model)
 	for {
+		// Compatibility transforms must see every effective tool and the
+		// complete instruction order on routes that use the folded form.
+		if req.hasChatUpdates() && (to != provider.Anthropic ||
+			!nativeChatRoute(wire, provider.HostOf(p.Base(to))) || !s.chatUpdatesFit(p, wire)) {
+			req = req.hoisted()
+		}
 		if mayDropImageTool(p) && !s.fits(p.ID, imageToolRefused, to) {
 			req, _ = withoutImageToolReq(req)
 		}
@@ -4544,14 +4567,22 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			req = unforced(req)
 		}
 		if req.Format != nil && !s.fits(p.ID, formatRefused(model), to) {
-			req = req.inSystem()
+			if req.hasChatUpdates() {
+				// Native placement may still require the whole fold. Keep
+				// the instruction separate until the builder decides.
+				r, f := *req, *req.Format
+				f.asText = true
+				r.Format, req = &f, &r
+			} else {
+				req = req.inSystem()
+			}
 		} else if req.Format != nil && to != provider.Anthropic && !s.fits(p.ID, schemaRefused(model), to) {
 			req = req.asObject()
 		}
-		if req.LastIsTurn && !req.Resume && req.endsWithAssistant() && !s.fits(p.ID, prefillRefused(model), to) {
+		if req.LastIsTurn && !req.Resume && req.hoisted().endsWithAssistant() && !s.fits(p.ID, prefillRefused(model), to) {
 			// a model that takes no prefill is asked to answer after the
 			// client's last, assistant, message (prefill.go, #1447)
-			req = req.userLast()
+			req = req.hoisted().userLast()
 		}
 		if to == provider.Anthropic && p.IsBedrock() && req.Metadata != nil {
 			// not the plain id Bedrock checks metadata.user_id against (#176)
@@ -4602,7 +4633,6 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				r.MaxTokens, req = n, &r
 			}
 		}
-		wire := provider.UpstreamNameIn(wires, p.ID, model)
 		sent := req
 		if dropsBillingLine(p, to, model, wire) && billingHeader.MatchString(req.System) {
 			// Claude Code's billing line, which changes every turn, as the
@@ -4612,7 +4642,11 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			r := *req
 			r.System, sent = withoutBillingHeader(r.System), &r
 		}
-		body, err := buildFor(p, to, sent, model)
+		buildModel := model
+		if chatUpdates {
+			buildModel = wire
+		}
+		body, err := buildFor(p, to, sent, buildModel)
 		if err != nil {
 			return nil, to, err
 		}
@@ -4643,7 +4677,16 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			p.Chat = strings.TrimSuffix(p.Chat, "/v1")
 			path = "/beta" + path
 		}
-		res, err := s.forward(ctx, p, to, path, p.Prepare(body), in)
+		native := to == provider.Anthropic && sent.hasChatUpdates() && hasSystemMessage(body)
+		sendCtx := ctx
+		if native {
+			sendCtx = context.WithValue(ctx, nativeChatKey{}, true)
+		}
+		res, err := s.forward(sendCtx, p, to, path, p.Prepare(body), in)
+		if native && errors.Is(err, errChatUpdatesFold) {
+			req = req.hoisted()
+			continue
+		}
 		if err != nil || res.StatusCode < 400 {
 			if dropped && err == nil {
 				// it was the key: not sent there again
@@ -4658,6 +4701,13 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		res.Body.Close()
 		res.Body = io.NopCloser(bytes.NewReader(b))
+		if native {
+			if refusesChatUpdates(res.StatusCode, b) {
+				s.markUnfit(p.ID, chatUpdateRefusedKey(p, wire), to)
+				continue
+			}
+			return res, to, nil
+		}
 		if to == provider.Anthropic && res.StatusCode == http.StatusBadRequest &&
 			samplingDeprecated.Match(b) && (req.Temp != nil || req.TopP != nil) {
 			// a Claude by a name samplingAsTaken can't read refuses the
@@ -4691,14 +4741,14 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				continue
 			}
 		}
-		if req.endsWithAssistant() && refusesPrefill(res.StatusCode, b) {
+		if req.hoisted().endsWithAssistant() && refusesPrefill(res.StatusCode, b) {
 			// the model takes no prefill (#1447), remembered for it alone.
 			// A conversation the client ended with the assistant's message
 			// is asked again with a user turn after it; magpie's own
 			// continuation of a cut reply isn't (streamTranslated)
 			s.markUnfit(p.ID, prefillRefused(model), to)
 			if req.LastIsTurn && !req.Resume {
-				req = req.userLast()
+				req = req.hoisted().userLast()
 				continue
 			}
 		}
@@ -5266,7 +5316,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	empty := emptyFails(actual)
 	// calls a model wrote into its text are made calls (textcalls.go)
 	written := func(see func(Event)) (func(Event), func()) {
-		names := textCallNames(request.Tools)
+		names := textCallNames(request.hoisted().Tools)
 		if names == nil {
 			return see, func() {}
 		}
@@ -5460,7 +5510,11 @@ func buildFor(p provider.Provider, proto provider.Protocol, r *Request, model st
 	if proto == provider.Gemini && p.IsVertex() {
 		return buildVertex(r, model)
 	}
-	return build(proto, r, model, buildHost(p), p.RejectsTemperature(model))
+	host := buildHost(p)
+	if proto == provider.Anthropic && r.hasChatUpdates() {
+		host = provider.HostOf(p.Base(proto))
+	}
+	return build(proto, r, model, host, p.RejectsTemperature(model))
 }
 
 func build(proto provider.Protocol, r *Request, model, host string, rejectTemp bool) ([]byte, error) {
@@ -5473,7 +5527,12 @@ func build(proto provider.Protocol, r *Request, model, host string, rejectTemp b
 		return buildGemini(r, model)
 	}
 	replay := anthropicReplaysThinking(host, model)
-	out := anthropicBody(r, model, replay)
+	var out []byte
+	if nativeChatRoute(model, host) {
+		out = anthropicUpdateBody(r, model, replay)
+	} else {
+		out = anthropicBody(r, model, replay)
+	}
 	if replay {
 		// a tool call with no thinking before it, which DeepSeek turns
 		// the whole request away for (#1611)

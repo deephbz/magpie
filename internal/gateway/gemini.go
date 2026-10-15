@@ -111,6 +111,7 @@ func (tc *gThinking) effort() string {
 // {parts:[{text}]}. droid sends no stream field; Factory answers SSE either
 // way, and a client that asked for JSON is given it after the fact.
 func buildGemini(r *Request, model string) ([]byte, error) {
+	r = r.hoisted()
 	req, err := geminiRequest(r, model, "gemini")
 	if err != nil {
 		return nil, err

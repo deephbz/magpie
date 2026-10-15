@@ -129,13 +129,19 @@ func (s *Server) refuseShapes(p provider.Provider, errBody, body []byte) bool {
 // withoutRefusedShapes is body as the provider takes it, leaving out what
 // it has refused before.
 func (s *Server) withoutRefusedShapes(p provider.Provider, body []byte) []byte {
-	if !s.fits(p.ID, shapeDeferred, provider.Anthropic) {
+	return s.withoutRefusedShapesKeepingUpdates(p, body, false)
+}
+
+// A native Chat send keeps its definitions even if another request learns a
+// refusal during decoration. Its IR owner rebuilds the whole request instead.
+func (s *Server) withoutRefusedShapesKeepingUpdates(p provider.Provider, body []byte, keepUpdates bool) []byte {
+	if !keepUpdates && !s.fits(p.ID, shapeDeferred, provider.Anthropic) {
 		body = withoutDeferredTools(body)
 	}
 	if !s.fits(p.ID, shapeRefsOnly, provider.Anthropic) {
 		body = withRefsSaid(body)
 	}
-	if !s.fits(p.ID, shapeTurnSystem, provider.Anthropic) {
+	if !keepUpdates && !s.fits(p.ID, shapeTurnSystem, provider.Anthropic) {
 		body = withSystemOnTop(body)
 	}
 	if !s.fits(p.ID, shapeSafeguards, provider.Anthropic) && gjson.GetBytes(body, "safeguards").Exists() {

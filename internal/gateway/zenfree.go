@@ -44,6 +44,7 @@ const zenStubNote = "(The model asked for a tool this session doesn't have.)"
 // zenFreeTools offers r's tools as Zen's free tier wants them, renaming
 // them in the conversation so far too.
 func zenFreeTools(r *Request) *zenTools {
+	*r = *r.hoisted()
 	z := &zenTools{back: map[string]string{}, stubs: map[string]bool{}}
 	tools := slices.Clone(r.Tools)
 	for _, need := range provider.OpenCodeTools {

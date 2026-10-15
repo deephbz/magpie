@@ -51,7 +51,7 @@ func (s *Server) serveDevin(w http.ResponseWriter, r *http.Request, from provide
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
 	// the vendor's own API is told the answer's format in words
-	req = req.inSystem()
+	req = req.hoisted().inSystem()
 	req.Model = model
 	ask := s.askDevin(home, model)
 	if req.WebSearch && !searching(r.Context()) {

@@ -99,8 +99,12 @@ func attachmentText(p Part) string {
 
 // Message is one turn.
 type Message struct {
-	Role  string // user | assistant
+	Role  string // user | assistant | system
 	Parts []Part
+	// ChatSystem distinguishes a Chat client's instruction update from
+	// an Anthropic client's system notice, which keeps its own handling.
+	ChatSystem bool
+	Tools      []Tool // functions added by this Chat system message
 }
 
 // joinSplitCalls joins an assistant message onto the assistant message
@@ -231,6 +235,9 @@ type Request struct {
 	// arguments reach the client with their zero fractions dropped
 	// (grok_integral.go).
 	Grok bool
+	// An empty leading Chat system message still contributes a separator
+	// when later instructions are hoisted.
+	chatSystemSet bool
 }
 
 // nsTool is a tool as a Responses client knows it: by its namespace and its

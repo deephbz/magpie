@@ -94,7 +94,7 @@ func (s *Server) antigravityForeseen(p provider.Provider, from provider.Protocol
 		return false
 	}
 	req, err := parse(from, body)
-	return err == nil && antigravityTurnsAway(req.System)
+	return err == nil && antigravityTurnsAway(req.hoisted().System)
 }
 
 // antigravityTurnedAwayHint is what magpie adds to Antigravity's words, after
@@ -164,6 +164,7 @@ func buildCodeAssist(r *Request, model, agent string) []byte {
 // the request goes out under is the one everything below is shaped from.
 // agent "vertex" is Vertex AI's request (buildVertex).
 func buildCodeAssistSent(r *Request, sent, agent string) []byte {
+	r = r.hoisted()
 	ag := agent == "antigravity"
 	vx := agent == "vertex"
 	at := "" // the level the id says it thinks at

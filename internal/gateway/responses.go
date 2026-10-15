@@ -1028,6 +1028,7 @@ func sealedReasoning(p Part) bool {
 
 // buildResponses renders a request for a Responses upstream.
 func buildResponses(r *Request, model, host string, rejectTemp bool) []byte {
+	r = r.hoisted()
 	// A turn's reasoning goes back as a reasoning item, as a model that
 	// thinks between tool calls wants it (DeepSeek: "The reasoning_text in
 	// the thinking mode must be passed back", #388). Only a DeepSeek model

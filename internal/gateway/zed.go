@@ -46,7 +46,7 @@ func (s *Server) serveZed(w http.ResponseWriter, r *http.Request, from provider.
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
 	// the vendor's own API is told the answer's format in words
-	req = req.inSystem()
+	req = req.hoisted().inSystem()
 	req.Model = model
 	// a Claude model's request is Anthropic's, which needs a reply limit:
 	// one the client didn't name is the model's own, as the Zed editor

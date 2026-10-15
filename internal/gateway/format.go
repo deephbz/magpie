@@ -29,6 +29,9 @@ type Format struct {
 	// told is a JSON object asked for in place of a schema the system
 	// prompt already holds (asObject).
 	told bool
+	// asText defers a refused format's instruction until native Chat
+	// placement has selected the positioned or whole-folded request.
+	asText bool
 }
 
 // formatName is the name a schema goes under when the client's API names
